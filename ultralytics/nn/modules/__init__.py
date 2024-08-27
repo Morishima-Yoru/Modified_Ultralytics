@@ -83,6 +83,9 @@ from .transformer import (
     TransformerLayer,
 )
 
+# Monix
+from .custom_block import *
+
 __all__ = (
     "Conv",
     "Conv2",
@@ -150,4 +153,7 @@ __all__ = (
     "Attention",
     "PSA",
     "SCDown",
+    "GELAN_SwinV2",
+    "PatchMerging",
+    "PatchEmbed",
 )
