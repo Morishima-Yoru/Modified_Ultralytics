@@ -1,0 +1,15 @@
+nc: 80 
+  
+backbone:
+  - [-1, 1, PatchEmbed, [96, 4]] 
+  # [come from, repeat (depth|arg[2]), GELAN_SwinV2, [out_ch(arg[1]), heads(arg[3]), window_size(arg[4]), ELAN_stack(arg[5], default=2), CSP_expandsion(arg[6], default .5)]]
+  - [-1, 2, GELAN_SwinV2, [96, 3, 7, 1]]
+  - [-1, 1, PatchMerging, [192]] 
+  - [-1, 2, GELAN_SwinV2, [192, 6, 7, 2]]
+  - [-1, 1, PatchMerging, [384]]
+  - [-1, 2, GELAN_SwinV2, [384, 12, 7, 2]]
+  - [-1, 1, PatchMerging, [768]] 
+  - [-1, 2, GELAN_SwinV2, [768, 24, 7, 1]]
+
+head:
+  - [-1, 1, Classify, [nc]] # Classify
