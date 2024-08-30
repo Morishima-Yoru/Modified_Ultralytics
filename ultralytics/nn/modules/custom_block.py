@@ -14,6 +14,7 @@ __all__ = (
     "Patchify",
     "PatchEmbed",
     "GELAN_InceptionNeXt",
+    "ELAN",
     "CNA",
 )
     
@@ -205,3 +206,11 @@ class GELAN_InceptionNeXt(GELAN_Wrapper):
             act=self.act,
             token_mixer=self.token_mixer,
         ).build()
+        
+class ELAN(GELAN_Wrapper):
+    def __init__(self, c1, c2, n, g, transition=True, e=0.5, act=nn.GELU, norm=LayerNorm2d):
+        super().__init__(c1, c2, n, g, transition, e, act, norm)
+        self.build()
+    
+    def computational(self, c) -> nn.Module:
+        return CNA(self.c, self.c, 3, 1, act=self.act, norm=self.norm)

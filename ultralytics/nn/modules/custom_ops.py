@@ -275,7 +275,7 @@ class SwinV2Block(nn.Module):
 class CNA(nn.Module):
     """Classic Convolution-Normalization-Activation topology"""
     
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=nn.GELU, norm=nn.BatchNorm2d):
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=nn.GELU, norm=LayerNorm2d):
         super().__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         self.norm = norm(c2) if isinstance(norm, nn.Module) else nn.Identity()
