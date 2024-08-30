@@ -1,0 +1,28 @@
+nc: 80 
+
+scales:
+  n: [1.00, 1.00, 99999]
+  t: [1.00, 0.25, 99999]
+  s: [1.00, 0.50, 99999]
+  m: [1.00, 1.00, 99999]
+  l: [1.50, 1.00, 99999]
+  x: [1.50, 1.50, 99999]
+  D6: [1.50, 1.00, 99999]
+  W6: [1.00, 1.50, 99999]
+  E6: [1.50, 1.50, 99999]
+  D8: [2.00, 1.00, 99999]
+  E8: [2.00, 1.50, 99999]
+
+backbone:
+  - [-1, 1, PatchEmbed, [96, 4]] 
+  # [come from, repeat (depth|arg[2]), GELAN_SwinV2, [out_ch(arg[1]), heads(arg[3]), window_size(arg[4]), ELAN_stack(arg[5], default=2), CSP_expandsion(arg[6], default .5)]]
+  - [-1, 2, GELAN_SwinV2, [96, 3, 7, 1, 0.5, True]]
+  - [-1, 1, PatchMerging, [192]] 
+  - [-1, 2, GELAN_SwinV2, [192, 6, 7, 2, 0.5, True]]
+  - [-1, 1, PatchMerging, [384]]
+  - [-1, 2, GELAN_SwinV2, [384, 12, 7, 2, 0.5, True]]
+  - [-1, 1, PatchMerging, [768]] 
+  - [-1, 2, GELAN_SwinV2, [768, 24, 7, 1, 0.5, True]]
+
+head:
+  - [-1, 1, Classify, [nc]] # Classify

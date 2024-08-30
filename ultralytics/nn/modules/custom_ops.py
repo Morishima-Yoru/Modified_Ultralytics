@@ -1,27 +1,37 @@
 
+from typing import Type, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+
 from .transformer import MLPBlock
+from .conv import autopad
 
-# class Mlp(nn.Module):
-#     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
-#         super().__init__()
-#         out_features = out_features or in_features
-#         hidden_features = hidden_features or in_features
-#         self.fc1 = nn.Linear(in_features, hidden_features)
-#         self.act = act_layer()
-#         self.fc2 = nn.Linear(hidden_features, out_features)
-#         self.drop = nn.Dropout(drop)
+class LayerNorm2d(nn.LayerNorm):
+    r""" LayerNorm for channels_first tensors with 2d spatial dimensions (ie N, C, H, W).
+    https://huggingface.co/spaces/Roll20/pet_score/blob/b258ef28152ab0d5b377d9142a23346f863c1526/lib/timm/models/convnext.py
+    """
 
-#     def forward(self, x):
-#         x = self.fc1(x)
-#         x = self.act(x)
-#         x = self.drop(x)
-#         x = self.fc2(x)
-#         x = self.drop(x)
-#         return x
+    def __init__(self, normalized_shape, eps=1e-6):
+        super().__init__(normalized_shape, eps=eps)
+
+    @staticmethod
+    def _is_contiguous(tensor: torch.Tensor) -> bool:
+        if torch.jit.is_scripting():
+            return tensor.is_contiguous()
+        else:
+            return tensor.is_contiguous(memory_format=torch.contiguous_format)
+    
+    def forward(self, x) -> torch.Tensor:
+        if self._is_contiguous(x):
+            return F.layer_norm(
+                x.permute(0, 2, 3, 1), self.normalized_shape, self.weight, self.bias, self.eps).permute(0, 3, 1, 2)
+        else:
+            s, u = torch.var_mean(x, dim=1, keepdim=True)
+            x = (x - u) * torch.rsqrt(s + self.eps)
+            x = x * self.weight[:, None, None] + self.bias[:, None, None]
+            return x
 
 def window_partition(x, window_size):
     """
@@ -76,7 +86,7 @@ class WindowAttention(nn.Module):
 
         # mlp to generate continuous relative position bias
         self.cpb_mlp = nn.Sequential(nn.Linear(2, 512, bias=True),
-                                     nn.ReLU(inplace=True),
+                                     nn.GELU(),
                                      nn.Linear(512, num_heads, bias=False))
 
         # get relative_coords_table
@@ -170,10 +180,10 @@ class DropPath(nn.Module):
             return x
         keep_prob = 1 - drop_prob
         shape = (x.shape[0],) + (1,) * (x.ndim-1)
-        random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
-        random_tensor.floor_()
-        output = x.div(keep_prob) * random_tensor
-        return output
+        random_tensor = x.new_empty(shape).bernoulli_(keep_prob)
+        if keep_prob > 0.0:
+            random_tensor.div_(keep_prob)
+        return x * random_tensor
     
     def forward(self, x):
         return self.drop_path_f(x, self.drop_prob, self.training)
@@ -261,4 +271,67 @@ class SwinV2Block(nn.Module):
         x = shortcut + self.drop_path(self.norm1(x))
         x = x + self.drop_path(self.norm2(self.mlp(x)))
         return x
+
+class CNA(nn.Module):
+    """Classic Convolution-Normalization-Activation topology"""
+    
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=nn.GELU, norm=nn.BatchNorm2d):
+        super().__init__()
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        self.norm = norm(c2) if isinstance(norm, nn.Module) else nn.Identity()
+        self.act = act if isinstance(act, nn.Module) else nn.Identity()
+
+        
+    def forward(self, x):
+        """Apply convolution, batch normalization and activation to input tensor."""
+        return self.act(self.norm(self.conv(x)))
+    
+    
+    def forward_fuse(self, x):
+        # TODO: Not implement.
+        return self.act(self.norm(self.conv(x)))
+    
+class InceptionDWConv2d(nn.Module):
+    """ Inception depthweise convolution
+    """
+    def __init__(self, c, ksize=3, band_ksize=11, branch_ratio=0.125):
+        super().__init__()
+        
+        gc = int(c * branch_ratio) # channel numbers of a convolution branch
+        self.dwconv_hw = nn.Conv2d(gc, gc, ksize, padding=ksize//2, groups=gc)
+        self.dwconv_w = nn.Conv2d(gc, gc, kernel_size=(1, band_ksize), padding=(0, band_ksize//2), groups=gc)
+        self.dwconv_h = nn.Conv2d(gc, gc, kernel_size=(band_ksize, 1), padding=(band_ksize//2, 0), groups=gc)
+        self.split_indexes = (c - 3 * gc, gc, gc, gc)
+        
+    def forward(self, x):
+        x_id, x_hw, x_w, x_h = torch.split(x, self.split_indexes, dim=1)
+        return torch.cat(
+            (x_id, self.dwconv_hw(x_hw), self.dwconv_w(x_w), self.dwconv_h(x_h)), 
+            dim=1,
+        )
+        
+class ConvMLP(nn.Module):
+    def __init__(
+            self, c1, c2, emb=None, 
+            act: Type[nn.Module]=nn.GELU, 
+            norm:Type[nn.Module]=None, 
+            bias=True, 
+            drop=0.):
+        super().__init__()
+        emb = emb or c1
+
+        self.fc1 = nn.Conv2d(c1, emb, kernel_size=1, bias=bias)
+        self.norm = norm(emb) if norm else nn.Identity()
+        self.act  = act() if act  else nn.Identity()
+        self.drop = nn.Dropout(drop)
+        self.fc2 = nn.Conv2d(emb, c2, kernel_size=1, bias=bias)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.norm(x)
+        x = self.act(x)
+        x = self.drop(x)
+        x = self.fc2(x)
+        return x
+
 

@@ -6,38 +6,63 @@ import numpy as np
 
 from .conv import Conv 
 from .custom_ops import *
+from .custom_wrapper import *
 
 __all__ = (
     "GELAN_SwinV2",
     "PatchMerging",
+    "Patchify",
     "PatchEmbed",
+    "GELAN_InceptionNeXt",
+    "CNA",
 )
     
+
+
 class GELAN_SwinV2(nn.Module):
-    # TODO: CSP 1x1 Conv will use BatchNorm. Except LayerNorm.
-    # TODO: ONNX Export unknown error.
-    def __init__(self, c1, c2, n=1, heads=3, window_size=7, g=2, e=0.5, act_csp=nn.GELU):
+    r""" Generalized Efficient Layer Aggeration Network (GELAN) styled Swin Transformer v2 feature extraction stage.
+
+    Args:
+        c1 (int): Number of input channels.
+        c2 (int): Number of output channels.
+        n (int, optional): Number of Computational blocks, Default: 2
+        heads (int, optional): Number of Swin Transformer Block heads. Default: 3
+        window_sz (int, optional): Number of Swin Transformer Block window size. Default: 7
+        g (int, optional): Number of groups with Computational blocks (Number of Swin Transformer Block every Comp. blocks contains). Default: 2
+        e (float, optional): CSP Expandsion. Default: 0.5
+        transition Union[bool, nn.Module]: Cross Staga Partial fusion strategies control. Can specify transition operation with nn.Module type which args wrappered to (in_dim, out_dim). Default: (False, True) a.k.a Fusion First.
+        act (nn.Module, optional): Activation for stray convolution. Default: nn.GELU
+    References:
+        C.-Y. Wang, I-H. Yeh, and H.-Y. M. Liao; YOLOv9: Learning What You Want to Learn Using Programmable Gradient Information; arXiv Preprint arXiv:2402.13616, Feb. 2024.
+        C.-Y. Wang, H.-Y. M. Liao, and I-H. Yeh; Designing Network Design Strategies Through Gradient Path Analysis; Journal of Information Science and Engineering, Vol. 39 No. 4, pp. 975-995.
+        Z. Liu, H. Hu, Y. Lin, Z. Yao, Z. Xie, Y. Wei, J. Ning, Y. Cao, Z. Zhang, L. Dong, F. Wei, and B. Guo; Swin Transformer V2: Scaling Up Capacity and Resolution; International Conference on Computer Vision and Pattern Recognition (CVPR), 2024.
+    """
+    def __init__(self, c1, c2, n=2, heads=3, window_sz=7, g=2, e=0.5, transition=True, act=nn.GELU):
         # in_ch (auto), out_ch (arg[0]), repeat (depth), head, window_size, GELAN_width, csp_expandr
         super().__init__()
         self.c = int(c2 * e)  # hidden channels
         self.g = g # ELAN group
-        self.window_size = window_size
-        self.shift_size = window_size // 2
-        self.cv1 = Conv(c1, c2, 1, 1, act=act_csp) # In/Out Channel match
-        self.cv2 = Conv((2 + n) * self.c, c2, 1, act=act_csp)  # Final Concat
-        self.r = nn.ModuleList(SwinV2Block(self.c, heads, window_size) for _ in range(g*n))
+        self.wsz = window_sz
+        self.ssz = window_sz // 2
+        self.cv1 = CNA(c1, c2, 1, 1, act=act, norm=LayerNorm2d) # In/Out Channel match
+        if (isinstance(transition, bool)):
+            self.ct1 = CNA((1 + n) * self.c, (1 + n) * self.c, 1, act=act, norm=nn.LayerNorm) if transition == True else nn.Identity()
+        else: self.ct1 = transition((1 + n) * self.c, (1 + n) * self.c)
+        self.ct2 = CNA((2 + n) * self.c, c2, 1, act=act, norm=LayerNorm2d)
+
+        self.r = nn.ModuleList(SwinV2Block(self.c, heads, window_sz, act_layer=act) for _ in range(g*n))
 
     def create_mask(self, x, H, W):
-        Hp = int(np.ceil(H / self.window_size)) * self.window_size
-        Wp = int(np.ceil(W / self.window_size)) * self.window_size
+        Hp = int(np.ceil(H / self.wsz)) * self.wsz
+        Wp = int(np.ceil(W / self.wsz)) * self.wsz
         # calculate attention mask for SW-MSA
         img_mask = torch.zeros((1, Hp, Wp, 1), device=x.device, dtype=x.dtype)  # 1 H W 1
-        h_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        w_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
+        h_slices = (slice(0, -self.wsz),
+                    slice(-self.wsz, -self.ssz),
+                    slice(-self.ssz, None))
+        w_slices = (slice(0, -self.wsz),
+                    slice(-self.wsz, -self.ssz),
+                    slice(-self.ssz, None))
         cnt = 0
         for h in h_slices:
             for w in w_slices:
@@ -46,15 +71,15 @@ class GELAN_SwinV2(nn.Module):
                     img_mask[:, h, w, :] = cnt
                 cnt += 1
 
-        mask_windows = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
-        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
+        mask_windows = window_partition(img_mask, self.wsz)  # nW, window_size, window_size, 1
+        mask_windows = mask_windows.view(-1, self.wsz * self.wsz)
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         return attn_mask
 
     def forward(self, x):
         csp, x = self.cv1(x).chunk(2, 1)
-        densed = [x, csp]
+        densed = [x]
         B, C, H, W = x.shape
         x = x.permute(0, 2, 3, 1).contiguous().view(B, H*W, C)
         attn_mask = self.create_mask(x, H, W)
@@ -66,39 +91,25 @@ class GELAN_SwinV2(nn.Module):
             if (elan_idx == self.g):
                 elan_idx = 0
                 densed.append(x.view(B, H, W, C).permute(0, 3, 1, 2).contiguous())
-        return self.cv2(torch.cat(densed, 1))
-
-    def forward_split(self, x):
-        csp, x = self.cv1(x).split((self.c, self.c), 1)
-        densed = [x, csp]
-        B, C, H, W = x.shape
-        x = x.permute(0, 2, 3, 1).contiguous().view(B, H*W, C)
-        attn_mask = self.create_mask(x, H, W)
-        elan_idx = 0
-        for itr in self.r:
-            itr.H, itr.W = H, W
-            x = itr(x, attn_mask)
-            elan_idx += 1
-            if (elan_idx == self.g):
-                elan_idx = 0
-                densed.append(x.view(B, H, W, C).permute(0, 3, 1, 2).contiguous())
-        return self.cv2(torch.cat(densed, 1))
+        return self.ct2(torch.cat([csp, self.ct1(torch.cat(densed, 1))], 1))
 
 class PatchMerging(nn.Module):
     r""" Patch Merging Layer.
 
     Args:
-        dim (int): Number of input channels.
+        c1 (int): Number of input channels.
         c2 (int): Number of output channels.
-        norm_layer (nn.Module, optional): Normalization layer.  Default: nn.LayerNorm
+        norm (nn.Module, optional): Normalization layer.  Default: nn.LayerNorm
+        norm_first (bool, optional): Decide the reduction operation order. True for Swin Transformer v1. Default: False
     """
 
-    def __init__(self, dim, c2, norm_layer=nn.LayerNorm):
+    def __init__(self, c1, c2, norm=nn.LayerNorm, norm_first=False):
         super().__init__()
-        assert c2 == (2 * dim)
-        self.dim = dim
-        self.reduction = nn.Linear(4 * dim, 2 * dim, bias=False)
-        self.norm = norm_layer(2 * dim)
+        assert c2 == (2 * c1)
+        self.c1 = c1
+        self.norm_first = norm_first
+        self.reduction = nn.Linear(4 * c1, c2, bias=False)
+        self.norm = norm(c2)
 
     def forward(self, x):
         B, C, H, W = x.shape
@@ -115,13 +126,34 @@ class PatchMerging(nn.Module):
         x = torch.cat([x0, x1, x2, x3], -1)  # B H/2 W/2 4*C
         x = x.view(B, -1, 4 * C)  # B H/2*W/2 4*C
 
+        if (self.norm_first): x = self.norm(x)
         x = self.reduction(x)
-        x = self.norm(x)
+        if (not self.norm_first): x = self.norm(x)
 
         x = x.view(B, int(H/2), int(W/2), C*2)
         x = x.permute(0, 3, 1, 2).contiguous()
         
         return x
+
+class Patchify(nn.Module):
+    r""" Patch Merging Layer (Called Patchify Stem in ConvNeXt) with full Convolutional network style.
+    
+    Args:
+        c1 (int): Number of input channels.
+        c2 (int): Number of output channels.
+        patch_sz (int, optional): Number of patch size. Default: 4
+        norm (Type[nn.Module], optional): Normalization layer.  Default: nn.LayerNorm
+
+        Z. Liu, H. Mao, C.-Y. Wu, C. Feichtenhofer, T. Darrell, and S. Xie; A ConvNet for the 2020s; IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 2022, pp. 11976-11986
+
+    """
+
+    def __init__(self, c1, emb, patch_sz=2, norm: Type[nn.Module]=LayerNorm2d):
+        super().__init__()
+        self.cv1 = CNA(c1, emb, patch_sz, patch_sz, p=0, act=None, norm=norm)
+
+    def forward(self, x):
+        return self.cv1(x)
 
 class PatchEmbed(nn.Module):
     r""" Image to Patch Embedding
@@ -130,10 +162,9 @@ class PatchEmbed(nn.Module):
         patch_size (int): Patch token size. Default: 4.
         c1 (int): Number of input image channels. Default: 3.
         embed_dim (int): Number of linear projection output channels. Default: 96.
-        norm_layer (nn.Module, optional): Normalization layer. Default: None
     """
 
-    def __init__(self, c1=3, embed_dim=96, patch_size=4, norm_layer=None):
+    def __init__(self, c1=3, embed_dim=96, patch_size=4, norm=None):
         super().__init__()
         self.patch_size = (patch_size, patch_size)
 
@@ -141,7 +172,7 @@ class PatchEmbed(nn.Module):
         self.embed_dim = embed_dim
 
         self.proj = nn.Conv2d(c1, embed_dim, kernel_size=patch_size, stride=patch_size)
-        self.norm = norm_layer(embed_dim) if norm_layer else nn.Identity()
+        self.norm = norm(embed_dim) if norm else None
 
     def forward(self, x):
         _, _, H, W = x.shape
@@ -151,9 +182,26 @@ class PatchEmbed(nn.Module):
                           0, self.patch_size[0] - H % self.patch_size[0],
                           0, 0))
         x = self.proj(x)
+        if (self.norm is None): return x
         B, C, H, W = x.shape
         x = x.flatten(2).transpose(1, 2)  # B Ph*Pw C
         x = self.norm(x)
         x = x.view(B, H, W, C)
         x = x.permute(0, 3, 1, 2).contiguous()
         return x
+
+class GELAN_InceptionNeXt(GELAN_Wrapper):
+    def __init__(self, c1, c2, n, g, mlp_ratio, transition=True, e=0.5, act=nn.GELU, norm=LayerNorm2d):
+        super().__init__(c1, c2, n, g, transition, e, act, norm)
+        self.mlp_ratio = mlp_ratio
+        self.token_mixer=InceptionDWConv2d
+        self.build()
+    
+    def computational(self, c) -> nn.Module:
+        return MetaNeXt(
+            c,
+            self.mlp_ratio,
+            norm=self.norm,
+            act=self.act,
+            token_mixer=self.token_mixer,
+        ).build()
