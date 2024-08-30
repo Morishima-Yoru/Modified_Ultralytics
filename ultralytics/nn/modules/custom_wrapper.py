@@ -43,7 +43,7 @@ class GELAN_Wrapper(nn.Module, ABC):
         
     def build(self) -> Self:
         self.cv1 = CNA(self.c1, self.c2, 1, 1, act=self.act, norm=self.norm) 
-        self.ct1 = self.transition_layer((1 + self.n) * self.c, (1 + self.n) * self.c, k=1, act=self.act, norm=LayerNorm2d) if self.transition == True else nn.Identity()
+        self.ct1 = self.transition_layer((1 + self.n) * self.c, (1 + self.n) * self.c, k=1, act=self.act, norm=self.norm) if self.transition == True else nn.Identity()
         self.ct2 = CNA((2 + self.n) * self.c, self.c2, 1, act=self.act, norm=self.norm)
         self.r = nn.ModuleList(self.computational(self.c) for _ in range(self.g*self.n))
         self.__ready = True
