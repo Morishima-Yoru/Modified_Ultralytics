@@ -1,6 +1,9 @@
 from abc import *
 import inspect
-from typing import Self, Type
+try:
+    from typing import Self, Type  # Python 3.11+
+except ImportError:
+    from typing_extensions import Self, Type  # Python <3.11
 from functools import partial
 
 import torch
