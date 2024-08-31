@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 import numpy as np
 
-from .block import ResNetBlock
+from ..block import ResNetBlock
 from .custom_ops import *
 from .custom_wrapper import *
 
@@ -141,29 +141,6 @@ class PatchMerging(nn.Module):
         
         return x
 
-class Patchify(nn.Module):
-    r""" Patch Merging Layer (Called Patchify Stem in ConvNeXt) with full Convolutional network style.
-    
-    Args:
-        c1 (int): Number of input channels.
-        c2 (int): Number of output channels.
-        patch_sz (int, optional): Number of patch size. Default: 4
-        norm (Type[nn.Module], optional): Normalization layer.  Default: nn.LayerNorm
-
-        Z. Liu, H. Mao, C.-Y. Wu, C. Feichtenhofer, T. Darrell, and S. Xie; A ConvNet for the 2020s; IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 2022, pp. 11976-11986
-
-    """
-
-    def __init__(self, c1, emb, patch_sz=2, norm_first=True, norm: Type[nn.Module]=LayerNorm2d):
-        super().__init__()
-        self.cv1 = nn.Conv2d(c1, emb, patch_sz, patch_sz)
-        nch = c1 if norm_first else emb
-        self.norm_first = norm_first
-        self.norm = norm(nch) if norm is not None else nn.Identity()
-
-    def forward(self, x):
-        return self.cv1(self.norm(x)) if self.norm_first else self.norm(self.cv1(x))
-
 class PatchEmbed(nn.Module):
     r""" Image to Patch Embedding
 
@@ -199,9 +176,37 @@ class PatchEmbed(nn.Module):
         x = x.permute(0, 3, 1, 2).contiguous()
         return x
 
+class Patchify(nn.Module):
+    r""" Patch Merging Layer (Called Patchify Stem in ConvNeXt) for full Convolutional network style.
+    
+    Args:
+        c1 (int): Number of input channels.
+        c2 (int): Number of output channels.
+        patch_sz (int, optional): Number of patch size. Default: 4
+        norm (Type[nn.Module], optional): Normalization layer.  Default: nn.LayerNorm
+
+        [1] Z. Liu, H. Mao, C.-Y. Wu, C. Feichtenhofer, T. Darrell, and S. Xie, "A ConvNet for the 2020s", in Proc. IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), New Orleans, LA, USA, pp. 11976-11986, Jun. 21, 2022.
+    """
+
+    def __init__(self, c1, emb, patch_sz=2, norm_first=True, norm: Type[nn.Module]=LayerNorm2d):
+        super().__init__()
+        self.cv1 = nn.Conv2d(c1, emb, patch_sz, patch_sz)
+        nch = c1 if norm_first else emb
+        self.norm_first = norm_first
+        self.norm = norm(nch) if norm is not None else nn.Identity()
+
+    def forward(self, x):
+        return self.cv1(self.norm(x)) if self.norm_first else self.norm(self.cv1(x))
     
 class ConvNeXt_Block(MetaNeXt):
     def __init__(self, c, drop_path=0., ls=1e-6):
+        """
+        Args:
+            c (int): Number of channels.
+            drop_path (float, optional): Drop path probability. Default: 0.
+            ls (float, optional): Label smoothing value. Default: 1e-6.
+        """
+        
         super().__init__(c, 4, drop_path, ls)
         self.build()
     
@@ -214,6 +219,13 @@ class InceptionNeXt_Block(MetaNeXt):
             mlp_ratio=4,
             drop_path: float=0.,
             ls: float=1e-6,):
+        """
+        Args:
+            c (int): Number of channels.
+            mlp_ratio (int, optional): MLP ratio. Default: 4.
+            drop_path (float, optional): Drop path probability. Default: 0.
+            ls (float, optional): Label smoothing value. Default: 1e-6.
+        """
         super().__init__(c, mlp_ratio=mlp_ratio, drop_path=drop_path, ls=ls)
         self.build()
     
@@ -222,6 +234,18 @@ class InceptionNeXt_Block(MetaNeXt):
 
 class GELAN_InceptionNeXt(GELAN_Wrapper):
     def __init__(self, c1, c2, n, g, mlp_ratio, transition=True, e=0.5, act=nn.GELU, norm=LayerNorm2d):
+        """
+        Args:
+            c1 (int): Number of input channels.
+            c2 (int): Number of output channels.
+            n (int): Number of repetitions.
+            g (int): Number of groups.
+            mlp_ratio (int): MLP ratio.
+            transition (bool, optional): Whether to use transition layer. Default: True.
+            e (float, optional): Expansion ratio. Default: 0.5.
+            act (nn.Module, optional): Activation function. Default: nn.GELU.
+            norm (nn.Module, optional): Normalization layer. Default: LayerNorm2d.
+        """
         super().__init__(c1, c2, n, g, transition, e, act, norm)
         self.mlp_ratio = mlp_ratio
         self.build()
@@ -231,6 +255,17 @@ class GELAN_InceptionNeXt(GELAN_Wrapper):
 
 class GELAN_ConvNeXt(GELAN_Wrapper):
     def __init__(self, c1, c2, n, g, transition=True, e=0.5, act=nn.GELU, norm=LayerNorm2d):
+        """
+        Args:
+            c1 (int): Number of input channels.
+            c2 (int): Number of output channels.
+            n (int): Number of repetitions.
+            g (int): Number of groups.
+            transition (bool, optional): Whether to use transition layer. Default: True.
+            e (float, optional): Expansion ratio. Default: 0.5.
+            act (nn.Module, optional): Activation function. Default: nn.GELU.
+            norm (nn.Module, optional): Normalization layer. Default: LayerNorm2d.
+        """
         super().__init__(c1, c2, n, g, transition, e, act, norm)
         self.build()
     
@@ -239,6 +274,12 @@ class GELAN_ConvNeXt(GELAN_Wrapper):
     
 class ConvNeXtStage(Sequentially):
     def __init__(self, c1, c2, n):
+        """
+        Args:
+            c1 (int): Number of input channels.
+            c2 (int): Number of output channels.
+            n (int): Number of repetitions.
+        """
         super().__init__(c1, c2, n)
         self.build()
 
@@ -247,6 +288,13 @@ class ConvNeXtStage(Sequentially):
     
 class InceptionNeXtStage(Sequentially):
     def __init__(self, c1, c2, n, mlp_ratio=4):
+        """
+        Args:
+            c1 (int): Number of input channels.
+            c2 (int): Number of output channels.
+            n (int): Number of repetitions.
+            mlp_ratio (int, optional): MLP ratio. Defaults to 4.
+        """
         super().__init__(c1, c2, n)
         self.mlp_ratio = mlp_ratio
         self.build()
@@ -256,6 +304,17 @@ class InceptionNeXtStage(Sequentially):
 
 class ELAN(GELAN_Wrapper):
     def __init__(self, c1, c2, n, g, transition=True, e=0.5, act=nn.GELU, norm=nn.BatchNorm2d):
+        """
+        Args:
+            c1 (int): Number of input channels.
+            c2 (int): Number of output channels.
+            n (int): Number of repetitions.
+            g (int): Number of groups.
+            transition (bool, optional): Whether to use transition layer. Default: True.
+            e (float, optional): Expansion ratio. Default: 0.5.
+            act (nn.Module, optional): Activation function. Default: nn.GELU.
+            norm (nn.Module, optional): Normalization layer. Default: nn.BatchNorm2d.
+        """
         super().__init__(c1, c2, n, g, transition, e, act, norm)
         self.build()
     

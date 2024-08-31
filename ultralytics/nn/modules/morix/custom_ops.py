@@ -5,12 +5,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from .transformer import MLPBlock
-from .conv import autopad
+from ..transformer import MLPBlock
+from ..conv import autopad
 
 class LayerNorm2d(nn.LayerNorm):
     r""" LayerNorm for channels_first tensors with 2d spatial dimensions (ie N, C, H, W).
-    https://huggingface.co/spaces/Roll20/pet_score/blob/b258ef28152ab0d5b377d9142a23346f863c1526/lib/timm/models/convnext.py
+    Copies from: https://huggingface.co/spaces/Roll20/pet_score/blob/b258ef28152ab0d5b377d9142a23346f863c1526/lib/timm/models/convnext.py
+
+    Args:
+        normalized_shape (int): C from an expected input of size (N, C, H, W)
+        eps (float, optional): A value added to the denominator for numerical stability. Default: 1e-6
     """
 
     def __init__(self, normalized_shape, eps=1e-6):
@@ -32,6 +36,103 @@ class LayerNorm2d(nn.LayerNorm):
             x = (x - u) * torch.rsqrt(s + self.eps)
             x = x * self.weight[:, None, None] + self.bias[:, None, None]
             return x
+
+class CNA(nn.Module):
+    """Classic Convolution-Normalization-Activation topology
+    
+    Args:
+        c1 (int): Number of input channels.
+        c2 (int): Number of output channels.
+        k (int, optional): Kernel size. Default: 1
+        s (int, optional): Stride. Default: 1
+        p (int, optional): Padding. Default: None
+        g (int, optional): Groups. Default: 1
+        d (int, optional): Dilation. Default: 1
+        act (Type[nn.Module], optional): Activation. Default: nn.GELU
+        norm (Type[nn.Module], optional): Normalization. Default: timm.models.convnext.LayerNorm2d copies
+
+    """
+    
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act:Type[nn.Module]=nn.GELU, norm=LayerNorm2d):
+        super().__init__()
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        self.norm = norm(c2) if norm is not None else nn.Identity()
+        self.act = act() if act is not None else nn.Identity()
+
+        
+    def forward(self, x):
+        """Apply convolution, batch normalization and activation to input tensor."""
+        return self.act(self.norm(self.conv(x)))
+    
+    
+    def forward_fuse(self, x):
+        # TODO: Not implement.
+        return self.act(self.norm(self.conv(x)))
+    
+class InceptionDWConv2d(nn.Module):
+    """ Inception depthweise convolution
+    Copies from https://github.com/sail-sg/inceptionnext/blob/main/models/inceptionnext.py
+
+    Args:
+        c (int): Number of input channels.
+        ksize (int, optional): Kernel size. Default: 3
+        band_ksize (int, optional): Kernel size in the band dimension. Default: 11
+        branch_ratio (float, optional): Branch ratio. Default: 0.125
+
+    References:
+        [1] W. Yu, P. Zhou, S. Yan, and X. Wang, "InceptionNeXt: When Inception Meets ConvNeXt," in Proc. IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), Seattle WA, USA, Jun. 17, 2024.
+    """
+    def __init__(self, c, ksize=3, band_ksize=11, branch_ratio=0.125):
+        super().__init__()
+        
+        gc = int(c * branch_ratio) # channel numbers of a convolution branch
+        self.dwconv_hw = nn.Conv2d(gc, gc, ksize, padding=ksize//2, groups=gc)
+        self.dwconv_w = nn.Conv2d(gc, gc, kernel_size=(1, band_ksize), padding=(0, band_ksize//2), groups=gc)
+        self.dwconv_h = nn.Conv2d(gc, gc, kernel_size=(band_ksize, 1), padding=(band_ksize//2, 0), groups=gc)
+        self.split_indexes = (c - 3 * gc, gc, gc, gc)
+        
+    def forward(self, x):
+        x_id, x_hw, x_w, x_h = torch.split(x, self.split_indexes, dim=1)
+        return torch.cat(
+            (x_id, self.dwconv_hw(x_hw), self.dwconv_w(x_w), self.dwconv_h(x_h)), 
+            dim=1,
+        )
+        
+class ConvMLP(nn.Module):
+    def __init__(
+            self, c1, c2, emb=None, 
+            act: Type[nn.Module]=nn.GELU, 
+            norm:Type[nn.Module]=None, 
+            bias=True, 
+            drop=0.):
+        """ Multi-layer perceptron equivalent using 1x1 Conv for full BCHW networks.
+
+        Args:
+            c1 (int): Number of input channels.
+            c2 (int): Number of output channels.
+            emb (int, optional): Number of intermediate channels. Default: None
+            act (Type[nn.Module], optional): Activation function. Default: nn.GELU
+            norm (Type[nn.Module], optional): Normalization layer.  Default: None
+            bias (bool, optional): Whether to use bias. Default: True
+            drop (float, optional): Dropout rate. Default: 0.0
+        """
+
+        super().__init__()
+        emb = emb or c1
+
+        self.fc1 = nn.Conv2d(c1, emb, kernel_size=1, bias=bias)
+        self.norm = norm(emb) if norm else nn.Identity()
+        self.act  = act()     if act  else nn.Identity()
+        self.drop = nn.Dropout(drop) if drop > 0. else nn.Identity()
+        self.fc2 = nn.Conv2d(emb, c2, kernel_size=1, bias=bias)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.norm(x)
+        x = self.act(x)
+        x = self.drop(x)
+        x = self.fc2(x)
+        return x
 
 def window_partition(x, window_size):
     """
@@ -270,68 +371,6 @@ class SwinV2Block(nn.Module):
         x = x.view(B, H * W, C)
         x = shortcut + self.drop_path(self.norm1(x))
         x = x + self.drop_path(self.norm2(self.mlp(x)))
-        return x
-
-class CNA(nn.Module):
-    """Classic Convolution-Normalization-Activation topology"""
-    
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=nn.GELU, norm=LayerNorm2d):
-        super().__init__()
-        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
-        self.norm = norm(c2) if norm is not None else nn.Identity()
-        self.act = act() if act is not None else nn.Identity()
-
-        
-    def forward(self, x):
-        """Apply convolution, batch normalization and activation to input tensor."""
-        return self.act(self.norm(self.conv(x)))
-    
-    
-    def forward_fuse(self, x):
-        # TODO: Not implement.
-        return self.act(self.norm(self.conv(x)))
-    
-class InceptionDWConv2d(nn.Module):
-    """ Inception depthweise convolution
-    """
-    def __init__(self, c, ksize=3, band_ksize=11, branch_ratio=0.125):
-        super().__init__()
-        
-        gc = int(c * branch_ratio) # channel numbers of a convolution branch
-        self.dwconv_hw = nn.Conv2d(gc, gc, ksize, padding=ksize//2, groups=gc)
-        self.dwconv_w = nn.Conv2d(gc, gc, kernel_size=(1, band_ksize), padding=(0, band_ksize//2), groups=gc)
-        self.dwconv_h = nn.Conv2d(gc, gc, kernel_size=(band_ksize, 1), padding=(band_ksize//2, 0), groups=gc)
-        self.split_indexes = (c - 3 * gc, gc, gc, gc)
-        
-    def forward(self, x):
-        x_id, x_hw, x_w, x_h = torch.split(x, self.split_indexes, dim=1)
-        return torch.cat(
-            (x_id, self.dwconv_hw(x_hw), self.dwconv_w(x_w), self.dwconv_h(x_h)), 
-            dim=1,
-        )
-        
-class ConvMLP(nn.Module):
-    def __init__(
-            self, c1, c2, emb=None, 
-            act: Type[nn.Module]=nn.GELU, 
-            norm:Type[nn.Module]=None, 
-            bias=True, 
-            drop=0.):
-        super().__init__()
-        emb = emb or c1
-
-        self.fc1 = nn.Conv2d(c1, emb, kernel_size=1, bias=bias)
-        self.norm = norm(emb) if norm else nn.Identity()
-        self.act  = act()     if act  else nn.Identity()
-        self.drop = nn.Dropout(drop) if drop > 0. else nn.Identity()
-        self.fc2 = nn.Conv2d(emb, c2, kernel_size=1, bias=bias)
-
-    def forward(self, x):
-        x = self.fc1(x)
-        x = self.norm(x)
-        x = self.act(x)
-        x = self.drop(x)
-        x = self.fc2(x)
         return x
 
 

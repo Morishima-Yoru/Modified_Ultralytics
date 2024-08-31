@@ -83,8 +83,8 @@ from .transformer import (
     TransformerLayer,
 )
 
-# Monix
-from .custom_block import *
+# Morix
+from .morix.custom_block import *
 
 __all__ = (
     "Conv",
@@ -156,4 +156,17 @@ __all__ = (
     "GELAN_SwinV2",
     "PatchMerging",
     "PatchEmbed",
+    
+    "GELAN_SwinV2",
+    "PatchMerging",
+    "Patchify",
+    "PatchEmbed",
+    "GELAN_InceptionNeXt",
+    "GELAN_ConvNeXt",
+    "ELAN",
+    "CNA",
+    "GELAN_MetaNeXt_Ident",
+    "Seq_Test",
+    "ConvNeXtStage",
+    "InceptionNeXtStage"
 )

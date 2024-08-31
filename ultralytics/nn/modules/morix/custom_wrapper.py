@@ -8,28 +8,28 @@ from functools import partial
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-import numpy as np
 
 from .custom_ops import *
     
+NO_COMPUTATIONAL_IMPLEMENTED = NotImplementedError("Attributes not initialized properly. You need to implement your computational method")
+NO_BUILD = NotImplementedError("Wrapper does not build properly. Call build() first.")
 
 class GELAN_Wrapper(nn.Module, ABC):
-    r""" Generalized Efficient Layer Aggeration Network (GELAN) wrapper
-        Make your stages gradient like Academia Sinica!
+    r""" Generalized Efficient Layer Aggeration Network (GELAN) wrapper.
+        Make your network gradient like Academia Sinica!
 
-    Args: TODO
+    Args: 
         c1 (int): Number of input channels.
         c2 (int): Number of output channels.
-        n (int, optional): Number of Computational blocks, Default: 2
-        g (int, optional): Number of groups with Computational blocks (Number of Swin Transformer Block every Comp. blocks contains). Default: 2
+        n (int, optional): Depth of the stage (Number of computation groups), Default: 2
+        g (int, optional): Number of Computational blocks in group. Default: 2
+        transition (bool, optional): Activate "Fusion First" transition layer. Detail refers to [1] Fig. 4c. Default: True
         e (float, optional): CSP Expandsion. Default: 0.5
-        transition Union[bool, nn.Module]: Cross Staga Partial fusion strategies control. Can specify transition operation with nn.Module type which args wrappered to (in_dim, out_dim). Default: (False, True) a.k.a Fusion First.
         act (nn.Module, optional): Activation for stray convolution. Default: nn.GELU
+        norm (nn.Module, optional): Normalization for stray convolution. Default: timm.models.convnext.LayerNorm2d copies.
     References:
-        C.-Y. Wang, I-H. Yeh, and H.-Y. M. Liao; "YOLOv9: Learning What You Want to Learn Using Programmable Gradient Information":"; arXiv Preprint arXiv:2402.13616, Feb. 2024.
-        C.-Y. Wang, H.-Y. M. Liao, and I-H. Yeh; "Designing Network Design Strategies Through Gradient Path Analysis"; Journal of Information Science and Engineering, Vol. 39 No. 4, pp. 975-995.
+        [1] C.-Y. Wang, I-H. Yeh, and H.-Y. M. Liao, "YOLOv9: Learning What You Want to Learn Using Programmable Gradient Information," arXiv preprint arXiv:2402.13616, Feb. 21, 2024.
+        [2] C.-Y. Wang, H.-Y. M. Liao, and I-H. Yeh, "Designing Network Design Strategies Through Gradient Path Analysis," Journal of Information Science and Engineering, Vol. 39 No. 4, pp. 975-995, 2023.
     """
     def __init__(self, c1, c2, n=2, g=2, transition=True, e=0.5, act=nn.GELU, norm=LayerNorm2d):
         super().__init__()
@@ -46,9 +46,10 @@ class GELAN_Wrapper(nn.Module, ABC):
         
     def build(self) -> Self:
         self.cv1 = CNA(self.c1, self.c2, 1, 1, act=self.act, norm=self.norm) 
-        self.ct1 = self.transition_layer((1 + self.n) * self.c, (1 + self.n) * self.c, k=1, act=self.act, norm=self.norm) if self.transition == True else nn.Identity()
+        self.ct1 = self.transition_layer((1 + self.n) * self.c, (1 + self.n) * self.c, k=1, act=self.act, norm=self.norm) \
+                if self.transition else nn.Identity()
         self.ct2 = CNA((2 + self.n) * self.c, self.c2, 1, act=self.act, norm=self.norm)
-        self.r = nn.ModuleList(self.computational(self.c) for _ in range(self.g*self.n))
+        self.r = nn.ModuleList([self.computational(self.c) for _ in range(self.g*self.n)])
         self.__ready = True
         return self
         
@@ -62,7 +63,7 @@ class GELAN_Wrapper(nn.Module, ABC):
     
     @abstractmethod
     def computational(self, c) -> nn.Module:
-        raise NotImplementedError("Attributes not initialized properly")
+        raise NO_COMPUTATIONAL_IMPLEMENTED
     
     @staticmethod
     def filter_kwargs(func, **kwargs):
@@ -71,13 +72,27 @@ class GELAN_Wrapper(nn.Module, ABC):
         return {k: v for k, v in kwargs.items() if k in valid_args}
 
     def computational_dimchange(self, x, direction: int):
-        # For something method which needs dim change before and after computation.
-        # In full B, C, H, W dim network. There is no anything needs to do.
+        '''
+        For something which needs dim change before and after computation for MLP/CNN mixed networks. 
+        Like stock Swin or ViT blocks, you need to change dim around BCHW and BHWC before and after computation.
+        *In full BCHW dim network. There is no anything needs to do.*
+        
+        Args:
+            x (torch.Tensor): input tensor
+            direction (int): 0 for before and 1 for after.
+        '''
+        
         return x
     
     def forward(self, x):
+        '''
+        Forward pass of the GELAN wrapper.
+
+        Raises:
+            NotImplementedError: If the wrapper has not been built yet.
+        '''
         if (not self.__ready): 
-            raise NotImplementedError("Attributes not initialized properly")
+            raise NO_BUILD
             
         csp, x = self.cv1(x).chunk(2, 1)
         densed = [x]
@@ -87,13 +102,19 @@ class GELAN_Wrapper(nn.Module, ABC):
             if idx % self.g == 0:
                 densed.append(self.computational_dimchange(x, 1))
                 
-        if (self.transition is False): return self.ct2(torch.cat([csp, densed], 1))
-        return self.ct2(torch.cat([csp, 
-                    self.ct1(torch.cat(densed, 1))], 1)
-                )
+        if (self.transition is False): 
+            return self.ct2(torch.cat([csp, densed], 1))
+        return self.ct2(torch.cat([csp, self.ct1(torch.cat(densed, 1))], 1))
 
 class Sequentially(nn.Module, ABC):
     def __init__(self, c1, c2, n):
+        ''' Simply wrapper to make block connect together in sequence to make a simple Backbone Stage.
+
+        Args:
+            c1 (int): Number of input channels.
+            c2 (int): Number of output channels.
+            n (int): Number of depths (repeat times of computational block).
+        '''
         super().__init__()
         self.c1 = c1
         self.c2 = c2
@@ -103,7 +124,7 @@ class Sequentially(nn.Module, ABC):
 
     @abstractmethod
     def computational(self, c) -> nn.Module:
-        raise NotImplementedError("Attributes not initialized properly")
+        raise NO_COMPUTATIONAL_IMPLEMENTED
 
     def build(self):
         self.__ready = True
@@ -115,16 +136,21 @@ class Sequentially(nn.Module, ABC):
     
     def forward(self, x):
         if (not self.__ready): 
-            raise NotImplementedError("Attributes not initialized properly")
+            raise NO_BUILD
         return self.cv1(self.seq(x))
 
 
 class MetaNeXt(nn.Module, ABC):
-    """ MetaNeXt Block
-    Args: TODO
+    """ MetaNeXt Block wrapper
+    Something advanced computational architecture modified from MetaFormer.
+
+    Args: 
         dim (int): Number of input channels.
         drop_path (float): Stochastic depth rate. Default: 0.0
         ls (float): Init value for Layer Scale. Default: 1e-6.
+
+    References:
+        [1] W. Yu, P. Zhou, S. Yan, and X. Wang, "InceptionNeXt: When Inception Meets ConvNeXt," in Proc. IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), Seattle WA, USA, Jun. 17, 2024.
     """
     def __init__(self, 
             c,
@@ -162,7 +188,7 @@ class MetaNeXt(nn.Module, ABC):
     
     def forward(self, x):
         if (not self.__ready): 
-            raise NotImplementedError("Attributes not initialized properly")
+            raise NO_BUILD
         shortcut = x
         x = self.token_mixer(x)
         x = self.norm1(x)
@@ -172,3 +198,4 @@ class MetaNeXt(nn.Module, ABC):
         x = self.drop_path(x) + shortcut
         return x
     
+
