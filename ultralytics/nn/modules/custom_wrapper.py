@@ -92,6 +92,33 @@ class GELAN_Wrapper(nn.Module, ABC):
                     self.ct1(torch.cat(densed, 1))], 1)
                 )
 
+class Sequentially(nn.Module, ABC):
+    def __init__(self, c1, c2, n):
+        super().__init__()
+        self.c1 = c1
+        self.c2 = c2
+        self.n = n
+        self.seq = None
+        self.__ready = False
+
+    @abstractmethod
+    def computational(self, c) -> nn.Module:
+        raise NotImplementedError("Attributes not initialized properly")
+
+    def build(self):
+        self.__ready = True
+        self.seq = nn.Sequential(
+            *[self.computational(self.c1) for _ in range(self.n)],
+        )
+        self.cv1 = CNA(self.c1, self.c2) if self.c1 != self.c2 else nn.Identity()
+        return self
+    
+    def forward(self, x):
+        if (not self.__ready): 
+            raise NotImplementedError("Attributes not initialized properly")
+        return self.cv1(self.seq(x))
+
+
 class MetaNeXt(nn.Module, ABC):
     """ MetaNeXt Block
     Args: TODO
@@ -118,11 +145,11 @@ class MetaNeXt(nn.Module, ABC):
         self.act = act
         self.token_mixer = token_mixer
         
-    def token_mixer_layer(self, c) -> nn.Module:
+    def token_mixer_layer(self, c: int) -> nn.Module:
         return self.token_mixer(c) if self.token_mixer is not None else nn.Identity()
     
     def MLP_layer(self, c) -> nn.Module:
-        return ConvMLP(c, c, int(c*self.mlp_ratio), self.act, self.norm)
+        return ConvMLP(c, c, int(c*self.mlp_ratio), self.act, None)
     
     def build(self) -> Self:
         self.token_mixer = self.token_mixer_layer(self.c)
@@ -144,3 +171,4 @@ class MetaNeXt(nn.Module, ABC):
             x = x.mul(self.gamma.reshape(1, -1, 1, 1))
         x = self.drop_path(x) + shortcut
         return x
+    

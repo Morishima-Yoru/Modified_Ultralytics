@@ -322,8 +322,8 @@ class ConvMLP(nn.Module):
 
         self.fc1 = nn.Conv2d(c1, emb, kernel_size=1, bias=bias)
         self.norm = norm(emb) if norm else nn.Identity()
-        self.act  = act() if act  else nn.Identity()
-        self.drop = nn.Dropout(drop)
+        self.act  = act()     if act  else nn.Identity()
+        self.drop = nn.Dropout(drop) if drop > 0. else nn.Identity()
         self.fc2 = nn.Conv2d(emb, c2, kernel_size=1, bias=bias)
 
     def forward(self, x):

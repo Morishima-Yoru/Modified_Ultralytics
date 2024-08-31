@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 import numpy as np
 
-from .conv import Conv 
+from .block import ResNetBlock
 from .custom_ops import *
 from .custom_wrapper import *
 
@@ -14,8 +14,13 @@ __all__ = (
     "Patchify",
     "PatchEmbed",
     "GELAN_InceptionNeXt",
+    "GELAN_ConvNeXt",
     "ELAN",
     "CNA",
+    "GELAN_MetaNeXt_Ident",
+    "Seq_Test",
+    "ConvNeXtStage",
+    "InceptionNeXtStage"
 )
     
 
@@ -149,12 +154,15 @@ class Patchify(nn.Module):
 
     """
 
-    def __init__(self, c1, emb, patch_sz=2, norm: Type[nn.Module]=LayerNorm2d):
+    def __init__(self, c1, emb, patch_sz=2, norm_first=True, norm: Type[nn.Module]=LayerNorm2d):
         super().__init__()
-        self.cv1 = CNA(c1, emb, patch_sz, patch_sz, p=0, act=None, norm=norm)
+        self.cv1 = nn.Conv2d(c1, emb, patch_sz, patch_sz)
+        nch = c1 if norm_first else emb
+        self.norm_first = norm_first
+        self.norm = norm(nch) if norm is not None else nn.Identity()
 
     def forward(self, x):
-        return self.cv1(x)
+        return self.cv1(self.norm(x)) if self.norm_first else self.norm(self.cv1(x))
 
 class PatchEmbed(nn.Module):
     r""" Image to Patch Embedding
@@ -191,22 +199,61 @@ class PatchEmbed(nn.Module):
         x = x.permute(0, 3, 1, 2).contiguous()
         return x
 
+    
+class ConvNeXt_Block(MetaNeXt):
+    def __init__(self, c, drop_path=0., ls=1e-6):
+        super().__init__(c, 4, drop_path, ls)
+        self.build()
+    
+    def token_mixer_layer(self, c: int) -> nn.Module:
+        return nn.Conv2d(c, c, kernel_size=7, padding=3, groups=c)
+    
+class InceptionNeXt_Block(MetaNeXt):
+    def __init__(self, 
+            c,
+            mlp_ratio=4,
+            drop_path: float=0.,
+            ls: float=1e-6,):
+        super().__init__(c, mlp_ratio=mlp_ratio, drop_path=drop_path, ls=ls)
+        self.build()
+    
+    def token_mixer_layer(self, c: int) -> nn.Module:
+        return InceptionDWConv2d(c)
+
 class GELAN_InceptionNeXt(GELAN_Wrapper):
     def __init__(self, c1, c2, n, g, mlp_ratio, transition=True, e=0.5, act=nn.GELU, norm=LayerNorm2d):
         super().__init__(c1, c2, n, g, transition, e, act, norm)
         self.mlp_ratio = mlp_ratio
-        self.token_mixer=InceptionDWConv2d
         self.build()
     
     def computational(self, c) -> nn.Module:
-        return MetaNeXt(
-            c,
-            self.mlp_ratio,
-            norm=self.norm,
-            act=self.act,
-            token_mixer=self.token_mixer,
-        ).build()
-        
+        return InceptionNeXt_Block(c, self.mlp_ratio)
+
+class GELAN_ConvNeXt(GELAN_Wrapper):
+    def __init__(self, c1, c2, n, g, transition=True, e=0.5, act=nn.GELU, norm=LayerNorm2d):
+        super().__init__(c1, c2, n, g, transition, e, act, norm)
+        self.build()
+    
+    def computational(self, c) -> nn.Module:
+        return ConvNeXt_Block(c)
+    
+class ConvNeXtStage(Sequentially):
+    def __init__(self, c1, c2, n):
+        super().__init__(c1, c2, n)
+        self.build()
+
+    def computational(self, c) -> nn.Module:
+        return ConvNeXt_Block(c)
+    
+class InceptionNeXtStage(Sequentially):
+    def __init__(self, c1, c2, n, mlp_ratio=4):
+        super().__init__(c1, c2, n)
+        self.mlp_ratio = mlp_ratio
+        self.build()
+
+    def computational(self, c) -> nn.Module:
+        return InceptionNeXt_Block(c, mlp_ratio=self.mlp_ratio)
+
 class ELAN(GELAN_Wrapper):
     def __init__(self, c1, c2, n, g, transition=True, e=0.5, act=nn.GELU, norm=nn.BatchNorm2d):
         super().__init__(c1, c2, n, g, transition, e, act, norm)
@@ -214,3 +261,32 @@ class ELAN(GELAN_Wrapper):
     
     def computational(self, c) -> nn.Module:
         return CNA(c, c, 3, 1, act=self.act, norm=self.norm)
+    
+class GELAN_MetaNeXt_Ident(GELAN_Wrapper):
+    def __init__(self, c1, c2, n, g, mlp_ratio, transition=True, e=0.5, act=nn.GELU, norm=LayerNorm2d):
+        super().__init__(c1, c2, n, g, transition, e, act, norm)
+        self.mlp_ratio = mlp_ratio
+        self.build()
+    
+    @staticmethod
+    def tk(c) -> nn.Module:
+        return ConvNeXt_Block(c)
+
+    def computational(self, c) -> nn.Module:
+        return MetaNeXt(
+            c,
+            self.mlp_ratio,
+            norm=self.norm,
+            act=self.act,
+            token_mixer=self.tk
+        ).build()  
+    
+class Seq_Test(Sequentially):
+    def __init__(self, c1, c2, n):
+        super().__init__(c1, c2, n)
+        self.build()
+
+    def computational(self, c) -> nn.Module:
+        return ResNetBlock(c, c, e=1)
+
+    
