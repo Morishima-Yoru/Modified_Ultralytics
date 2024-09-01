@@ -103,7 +103,7 @@ class GELAN_Wrapper(nn.Module, ABC):
                 densed.append(self.computational_dimchange(x, 1))
                 
         if (self.transition is False): 
-            return self.ct2(torch.cat([csp, densed], 1))
+            return self.ct2(torch.cat([csp, *densed], 1))
         return self.ct2(torch.cat([csp, self.ct1(torch.cat(densed, 1))], 1))
 
 class Sequentially(nn.Module, ABC):
