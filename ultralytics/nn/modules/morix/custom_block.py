@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision.ops import DeformConv2d
 
 import numpy as np
 
@@ -22,8 +23,6 @@ __all__ = (
     "ConvNeXtStage",
     "InceptionNeXtStage"
 )
-    
-
 
 class GELAN_SwinV2(nn.Module):
     r""" Generalized Efficient Layer Aggeration Network (GELAN) styled Swin Transformer v2 feature extraction stage.
@@ -322,23 +321,17 @@ class ELAN(GELAN_Wrapper):
         return CNA(c, c, 3, 1, act=self.act, norm=self.norm)
     
 class GELAN_MetaNeXt_Ident(GELAN_Wrapper):
-    def __init__(self, c1, c2, n, g, mlp_ratio, transition=True, e=0.5, act=nn.GELU, norm=LayerNorm2d):
+
+    def __init__(self, c1, c2, n, g, mlp_ratio, transition=True, e=0.5, act=nn.GELU, norm=LayerNorm2d): 
         super().__init__(c1, c2, n, g, transition, e, act, norm)
         self.mlp_ratio = mlp_ratio
         self.build()
-    
-    @staticmethod
-    def tk(c) -> nn.Module:
-        return ConvNeXt_Block(c)
 
     def computational(self, c) -> nn.Module:
-        return MetaNeXt(
-            c,
-            self.mlp_ratio,
-            norm=self.norm,
-            act=self.act,
-            token_mixer=self.tk
-        ).build()  
+        return nn.Sequential(
+            InceptionNeXt_Block(c, mlp_ratio=self.mlp_ratio),
+            CNA(c, c, 3, 1, act=self.act, norm=self.norm))
+
     
 class Seq_Test(Sequentially):
     def __init__(self, c1, c2, n):
@@ -348,4 +341,4 @@ class Seq_Test(Sequentially):
     def computational(self, c) -> nn.Module:
         return ResNetBlock(c, c, e=1)
 
-    
+
