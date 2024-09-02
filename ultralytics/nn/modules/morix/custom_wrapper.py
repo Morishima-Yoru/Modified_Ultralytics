@@ -157,7 +157,7 @@ class MetaNeXt(nn.Module, ABC):
             mlp_ratio=4,
             drop_path: float=0.,
             ls: float=1e-6,
-            norm: Type[nn.Module]=LayerNorm2d,
+            norm: Type[nn.Module]=FakeLayerNorm2d,
             act: Type[nn.Module]=nn.GELU,
             token_mixer: Type[nn.Module]=None):
         super().__init__()

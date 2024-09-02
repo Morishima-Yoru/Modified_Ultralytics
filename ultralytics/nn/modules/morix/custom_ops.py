@@ -64,7 +64,9 @@ class CNA(nn.Module):
 
     """
     
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act:Type[nn.Module]=nn.GELU, norm=FakeLayerNorm2d):
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, 
+                 act: Type[nn.Module]=nn.GELU, 
+                 norm: Type[nn.Module]=FakeLayerNorm2d):
         super().__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         # Direct lint from yaml handle.
