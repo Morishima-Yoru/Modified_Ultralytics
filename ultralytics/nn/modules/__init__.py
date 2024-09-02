@@ -85,6 +85,7 @@ from .transformer import (
 
 # Morix
 from .morix.custom_block import *
+from .morix.custom_ops import *
 
 __all__ = (
     "Conv",

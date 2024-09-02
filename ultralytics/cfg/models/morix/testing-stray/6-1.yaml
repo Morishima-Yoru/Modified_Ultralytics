@@ -1,0 +1,15 @@
+
+nc: 80
+backbone:
+  - [-1, 1, CNA, [16, 3, 2]] # 0-P1/2
+  - [-1, 1, CNA, [32, 3, 2]] # 0-P1/2
+  - [-1, 2, ELAN_DarknetBottleneck, [32, 1, False, 0.5, nn.GELU, FakeLayerNorm2d]]
+  - [-1, 1, CNA, [64, 3, 2]] # 0-P1/2
+  - [-1, 2, ELAN_DarknetBottleneck, [64, 1, False, 0.5, nn.GELU, FakeLayerNorm2d]]
+  - [-1, 1, CNA, [128, 3, 2]] # 0-P1/2
+  - [-1, 2, ELAN_DarknetBottleneck, [128, 1, False, 0.5, nn.GELU, FakeLayerNorm2d]]
+  - [-1, 1, CNA, [256, 3, 2]] # 0-P1/2
+  - [-1, 2, ELAN_DarknetBottleneck, [256, 1, False, 0.5, nn.GELU, FakeLayerNorm2d]]
+# YOLOv8.0n head
+head:
+  - [-1, 1, ClassificationHead, [nc]] # Classify

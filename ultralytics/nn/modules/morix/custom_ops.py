@@ -6,14 +6,16 @@ import torch.nn.functional as F
 import numpy as np
 import torchvision
 
+from functools import partial
+
 from ..transformer import MLPBlock
 from ..conv import autopad
 
+
 class LayerNorm2d(nn.LayerNorm):
     r""" LayerNorm for channels_first tensors with 2d spatial dimensions (ie N, C, H, W).
-    Copies from: https://huggingface.co/spaces/Roll20/pet_score/blob/b258ef28152ab0d5b377d9142a23346f863c1526/lib/timm/models/convnext.py
-
-    Args:
+        https://discuss.pytorch.org/t/groupnorm-num-groups-1-and-layernorm-are-not-equivalent/145468/2
+    
         normalized_shape (int): C from an expected input of size (N, C, H, W)
         eps (float, optional): A value added to the denominator for numerical stability. Default: 1e-6
     """
@@ -33,10 +35,18 @@ class LayerNorm2d(nn.LayerNorm):
             return F.layer_norm(
                 x.permute(0, 2, 3, 1), self.normalized_shape, self.weight, self.bias, self.eps).permute(0, 3, 1, 2)
         else:
-            s, u = torch.var_mean(x, dim=1, keepdim=True)
-            x = (x - u) * torch.rsqrt(s + self.eps)
-            x = x * self.weight[:, None, None] + self.bias[:, None, None]
-            return x
+            return F.layer_norm(
+                x.permute(0, 2, 3, 1).contiguous(), self.normalized_shape, self.weight, self.bias, self.eps).permute(0, 3, 1, 2).contiguous()
+
+class FakeLayerNorm2d(nn.GroupNorm):
+    """
+    https://discuss.pytorch.org/t/groupnorm-num-groups-1-and-layernorm-are-not-equivalent/145468/2
+
+    Args:
+        nn (_type_): _description_
+    """
+    def __init__(self, num_channels: int, eps: float = 0.00001, affine: bool = True, device=None, dtype=None):
+        super().__init__(1, num_channels, eps, affine, device, dtype)
 
 class CNA(nn.Module):
     """Classic Convolution-Normalization-Activation topology
@@ -54,11 +64,15 @@ class CNA(nn.Module):
 
     """
     
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act:Type[nn.Module]=nn.GELU, norm=LayerNorm2d):
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act:Type[nn.Module]=nn.GELU, norm=FakeLayerNorm2d):
         super().__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        # Direct lint from yaml handle.
+        if (isinstance(norm, str)): norm = eval(norm)
+        if (isinstance(act,  str)): act  = eval(act)
+
         self.norm = norm(c2) if norm is not None else nn.Identity()
-        self.act = act() if act is not None else nn.Identity()
+        self.act =  act()    if act  is not None else nn.Identity()
 
         
     def forward(self, x):
@@ -120,12 +134,16 @@ class ConvMLP(nn.Module):
 
         super().__init__()
         emb = emb or c1
+        
+        # Direct lint from yaml handle.
+        if (isinstance(norm, str)): norm = eval(norm)
+        if (isinstance(act,  str)): act  = eval(act)
 
         self.fc1 = nn.Conv2d(c1, emb, kernel_size=1, bias=bias)
         self.norm = norm(emb) if norm else nn.Identity()
         self.act  = act()     if act  else nn.Identity()
         self.drop = nn.Dropout(drop) if drop > 0. else nn.Identity()
-        self.fc2 = nn.Conv2d(emb, c2, kernel_size=1, bias=bias)
+        self.fc2 =  nn.Conv2d(emb, c2, kernel_size=1, bias=bias)
 
     def forward(self, x):
         x = self.fc1(x)
@@ -438,3 +456,17 @@ class DeformableConv2d(nn.Module):
                                           stride=self.stride,
                                           dilation=self.dilation)
         return x
+    
+class DarknetBottleneck(nn.Module):
+    """Standard bottleneck with activation and normalization exposed."""
+
+    def __init__(self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5, act=nn.SiLU, norm=nn.BatchNorm2d):
+        """Initializes a standard bottleneck module with optional shortcut connection and configurable parameters."""
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = CNA(c1, c_, k[0], 1     , act=act, norm=norm)
+        self.cv2 = CNA(c_, c2, k[1], 1, g=g, act=act, norm=norm)
+        self.add = shortcut and c1 == c2
+
+    def forward(self, x):
+        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))

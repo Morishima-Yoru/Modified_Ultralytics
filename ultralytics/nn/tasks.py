@@ -58,6 +58,7 @@ from ultralytics.nn.modules import (
 )
 from ultralytics.nn.modules.morix.custom_block import *
 from ultralytics.nn.modules.morix.custom_ops import *
+from ultralytics.nn.modules.morix.custom_head import *
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
 from ultralytics.utils.loss import (
@@ -453,7 +454,7 @@ class ClassificationModel(BaseModel):
     def reshape_outputs(model, nc):
         """Update a TorchVision classification model to class count 'n' if required."""
         name, m = list((model.model if hasattr(model, "model") else model).named_children())[-1]  # last module
-        if isinstance(m, Classify):  # YOLO Classify() head
+        if isinstance(m, Classify) or isinstance(m, ClassificationHead):  # YOLO Classify() head
             if m.linear.out_features != nc:
                 m.linear = nn.Linear(m.linear.in_features, nc)
         elif isinstance(m, nn.Linear):  # ResNet, EfficientNet
@@ -942,6 +943,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             SCDown,
             C2fCIB,
             # 
+            ClassificationHead,
             GELAN_SwinV2,
             PatchMerging,
             Patchify,
@@ -954,6 +956,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             InceptionNeXtStage,
             GELAN_MetaNeXt_Ident,
             Seq_Test,
+            ELAN_DarknetBottleneck,
         }:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
@@ -965,7 +968,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 )  # num heads
             args = [c1, c2, *args[1:]]
             if m in {BottleneckCSP, C1, C2, C2f, C2fAttn, C3, C3TR, C3Ghost, C3x, RepC3, C2fCIB, GELAN_SwinV2, GELAN_InceptionNeXt, GELAN_ConvNeXt, ELAN,
-                      ConvNeXtStage, InceptionNeXtStage, GELAN_MetaNeXt_Ident, Seq_Test}:
+                      ConvNeXtStage, InceptionNeXtStage, GELAN_MetaNeXt_Ident, Seq_Test, ELAN_DarknetBottleneck}:
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m is AIFI:
@@ -996,6 +999,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             c2 = ch[f[-1]]
         else:
             c2 = ch[f]
+        print(args)
         m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace("__main__.", "")  # module type
         m.np = sum(x.numel() for x in m_.parameters())  # number params
@@ -1096,7 +1100,7 @@ def guess_model_task(model):
         for m in model.modules():
             if isinstance(m, Segment):
                 return "segment"
-            elif isinstance(m, Classify):
+            elif isinstance(m, Classify) or isinstance(m, ClassificationHead):
                 return "classify"
             elif isinstance(m, Pose):
                 return "pose"

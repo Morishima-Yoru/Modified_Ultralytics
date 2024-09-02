@@ -5,7 +5,7 @@ from torchvision.ops import DeformConv2d
 
 import numpy as np
 
-from ..block import ResNetBlock
+from ..block import ResNetBlock, Bottleneck
 from .custom_ops import *
 from .custom_wrapper import *
 
@@ -21,7 +21,8 @@ __all__ = (
     "GELAN_MetaNeXt_Ident",
     "Seq_Test",
     "ConvNeXtStage",
-    "InceptionNeXtStage"
+    "InceptionNeXtStage",
+    "ELAN_DarknetBottleneck"
 )
 
 class GELAN_SwinV2(nn.Module):
@@ -49,11 +50,11 @@ class GELAN_SwinV2(nn.Module):
         self.g = g # ELAN group
         self.wsz = window_sz
         self.ssz = window_sz // 2
-        self.cv1 = CNA(c1, c2, 1, 1, act=act, norm=LayerNorm2d) # In/Out Channel match
+        self.cv1 = CNA(c1, c2, 1, 1, act=act, norm=FakeLayerNorm2d) # In/Out Channel match
         if (isinstance(transition, bool)):
             self.ct1 = CNA((1 + n) * self.c, (1 + n) * self.c, 1, act=act, norm=nn.LayerNorm) if transition == True else nn.Identity()
         else: self.ct1 = transition((1 + n) * self.c, (1 + n) * self.c)
-        self.ct2 = CNA((2 + n) * self.c, c2, 1, act=act, norm=LayerNorm2d)
+        self.ct2 = CNA((2 + n) * self.c, c2, 1, act=act, norm=FakeLayerNorm2d)
 
         self.r = nn.ModuleList(SwinV2Block(self.c, heads, window_sz, act_layer=act) for _ in range(g*n))
 
@@ -187,8 +188,11 @@ class Patchify(nn.Module):
         [1] Z. Liu, H. Mao, C.-Y. Wu, C. Feichtenhofer, T. Darrell, and S. Xie, "A ConvNet for the 2020s", in Proc. IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), New Orleans, LA, USA, pp. 11976-11986, Jun. 21, 2022.
     """
 
-    def __init__(self, c1, emb, patch_sz=2, norm_first=True, norm: Type[nn.Module]=LayerNorm2d):
+    def __init__(self, c1, emb, patch_sz=2, norm_first=True, norm: Type[nn.Module]=FakeLayerNorm2d):
         super().__init__()
+        
+        if (isinstance(norm, str)): norm = eval(norm)
+        
         self.cv1 = nn.Conv2d(c1, emb, patch_sz, patch_sz)
         nch = c1 if norm_first else emb
         self.norm_first = norm_first
@@ -198,7 +202,7 @@ class Patchify(nn.Module):
         return self.cv1(self.norm(x)) if self.norm_first else self.norm(self.cv1(x))
     
 class ConvNeXt_Block(MetaNeXt):
-    def __init__(self, c, drop_path=0., ls=1e-6):
+    def __init__(self, c, drop_path=0., ls=1e-6, act=nn.GELU, norm=FakeLayerNorm2d):
         """
         Args:
             c (int): Number of channels.
@@ -206,7 +210,7 @@ class ConvNeXt_Block(MetaNeXt):
             ls (float, optional): Label smoothing value. Default: 1e-6.
         """
         
-        super().__init__(c, 4, drop_path, ls)
+        super().__init__(c, 4, drop_path, ls, act=act, norm=norm)
         self.build()
     
     def token_mixer_layer(self, c: int) -> nn.Module:
@@ -217,7 +221,10 @@ class InceptionNeXt_Block(MetaNeXt):
             c,
             mlp_ratio=4,
             drop_path: float=0.,
-            ls: float=1e-6,):
+            ls: float=1e-6,
+            act: Type[nn.Module]=nn.GELU,
+            norm: Type[nn.Module]=LayerNorm2d,
+            ):
         """
         Args:
             c (int): Number of channels.
@@ -225,14 +232,14 @@ class InceptionNeXt_Block(MetaNeXt):
             drop_path (float, optional): Drop path probability. Default: 0.
             ls (float, optional): Label smoothing value. Default: 1e-6.
         """
-        super().__init__(c, mlp_ratio=mlp_ratio, drop_path=drop_path, ls=ls)
+        super().__init__(c, mlp_ratio=mlp_ratio, drop_path=drop_path, ls=ls, act=act, norm=norm)
         self.build()
     
     def token_mixer_layer(self, c: int) -> nn.Module:
         return InceptionDWConv2d(c)
 
 class GELAN_InceptionNeXt(GELAN_Wrapper):
-    def __init__(self, c1, c2, n, g, mlp_ratio, transition=True, e=0.5, act=nn.GELU, norm=LayerNorm2d):
+    def __init__(self, c1, c2, n, g, mlp_ratio, transition=True, e=0.5, act=nn.GELU, norm=FakeLayerNorm2d):
         """
         Args:
             c1 (int): Number of input channels.
@@ -243,7 +250,7 @@ class GELAN_InceptionNeXt(GELAN_Wrapper):
             transition (bool, optional): Whether to use transition layer. Default: True.
             e (float, optional): Expansion ratio. Default: 0.5.
             act (nn.Module, optional): Activation function. Default: nn.GELU.
-            norm (nn.Module, optional): Normalization layer. Default: LayerNorm2d.
+            norm (nn.Module, optional): Normalization layer. Default: FakeLayerNorm2d.
         """
         super().__init__(c1, c2, n, g, transition, e, act, norm)
         self.mlp_ratio = mlp_ratio
@@ -253,7 +260,7 @@ class GELAN_InceptionNeXt(GELAN_Wrapper):
         return InceptionNeXt_Block(c, self.mlp_ratio)
 
 class GELAN_ConvNeXt(GELAN_Wrapper):
-    def __init__(self, c1, c2, n, g, transition=True, e=0.5, act=nn.GELU, norm=LayerNorm2d):
+    def __init__(self, c1, c2, n, g, transition=True, e=0.5, act=nn.GELU, norm=FakeLayerNorm2d):
         """
         Args:
             c1 (int): Number of input channels.
@@ -263,7 +270,7 @@ class GELAN_ConvNeXt(GELAN_Wrapper):
             transition (bool, optional): Whether to use transition layer. Default: True.
             e (float, optional): Expansion ratio. Default: 0.5.
             act (nn.Module, optional): Activation function. Default: nn.GELU.
-            norm (nn.Module, optional): Normalization layer. Default: LayerNorm2d.
+            norm (nn.Module, optional): Normalization layer. Default: FakeLayerNorm2d.
         """
         super().__init__(c1, c2, n, g, transition, e, act, norm)
         self.build()
@@ -272,7 +279,7 @@ class GELAN_ConvNeXt(GELAN_Wrapper):
         return ConvNeXt_Block(c)
     
 class ConvNeXtStage(Sequentially):
-    def __init__(self, c1, c2, n):
+    def __init__(self, c1, c2, n, act=nn.GELU, norm=FakeLayerNorm2d):
         """
         Args:
             c1 (int): Number of input channels.
@@ -280,13 +287,15 @@ class ConvNeXtStage(Sequentially):
             n (int): Number of repetitions.
         """
         super().__init__(c1, c2, n)
+        self.act = act
+        self.norm = norm
         self.build()
 
     def computational(self, c) -> nn.Module:
-        return ConvNeXt_Block(c)
+        return ConvNeXt_Block(c, act=self.act, norm=self.norm)
     
 class InceptionNeXtStage(Sequentially):
-    def __init__(self, c1, c2, n, mlp_ratio=4):
+    def __init__(self, c1, c2, n, mlp_ratio=4, act=nn.GELU, norm=LayerNorm2d):
         """
         Args:
             c1 (int): Number of input channels.
@@ -295,14 +304,16 @@ class InceptionNeXtStage(Sequentially):
             mlp_ratio (int, optional): MLP ratio. Defaults to 4.
         """
         super().__init__(c1, c2, n)
+        self.act = act
+        self.norm = norm
         self.mlp_ratio = mlp_ratio
         self.build()
 
     def computational(self, c) -> nn.Module:
-        return InceptionNeXt_Block(c, mlp_ratio=self.mlp_ratio)
+        return InceptionNeXt_Block(c, mlp_ratio=self.mlp_ratio, act=self.act, norm=self.norm)
 
 class ELAN(GELAN_Wrapper):
-    def __init__(self, c1, c2, n, g, transition=True, e=0.5, act=nn.GELU, norm=nn.BatchNorm2d):
+    def __init__(self, c1, c2, n, g, transition=False, e=0.5, act=nn.GELU, norm=nn.BatchNorm2d):
         """
         Args:
             c1 (int): Number of input channels.
@@ -319,18 +330,27 @@ class ELAN(GELAN_Wrapper):
     
     def computational(self, c) -> nn.Module:
         return CNA(c, c, 3, 1, act=self.act, norm=self.norm)
+
+class ELAN_DarknetBottleneck(GELAN_Wrapper):
+    def __init__(self, c1, c2, n, g=1, transition=False, e=0.5, act=nn.SiLU, norm=nn.BatchNorm2d):
+        super().__init__(c1, c2, n, g, transition, e, act, norm)
+        self.act = act
+        self.norm = norm
+        self.build()
+        
+    def computational(self, c) -> nn.Module:
+        return DarknetBottleneck(c, c, True, e=1., act=self.act, norm=self.norm)
     
+
 class GELAN_MetaNeXt_Ident(GELAN_Wrapper):
 
-    def __init__(self, c1, c2, n, g, mlp_ratio, transition=True, e=0.5, act=nn.GELU, norm=LayerNorm2d): 
+    def __init__(self, c1, c2, n, g, mlp_ratio, transition=True, e=0.5, act=nn.GELU, norm=FakeLayerNorm2d): 
         super().__init__(c1, c2, n, g, transition, e, act, norm)
         self.mlp_ratio = mlp_ratio
         self.build()
 
     def computational(self, c) -> nn.Module:
-        return nn.Sequential(
-            InceptionNeXt_Block(c, mlp_ratio=self.mlp_ratio),
-            CNA(c, c, 3, 1, act=self.act, norm=self.norm))
+        return InceptionNeXt_Block(c, mlp_ratio=self.mlp_ratio)
 
     
 class Seq_Test(Sequentially):

@@ -31,7 +31,7 @@ class GELAN_Wrapper(nn.Module, ABC):
         [1] C.-Y. Wang, I-H. Yeh, and H.-Y. M. Liao, "YOLOv9: Learning What You Want to Learn Using Programmable Gradient Information," arXiv preprint arXiv:2402.13616, Feb. 21, 2024.
         [2] C.-Y. Wang, H.-Y. M. Liao, and I-H. Yeh, "Designing Network Design Strategies Through Gradient Path Analysis," Journal of Information Science and Engineering, Vol. 39 No. 4, pp. 975-995, 2023.
     """
-    def __init__(self, c1, c2, n=2, g=2, transition=True, e=0.5, act=nn.GELU, norm=LayerNorm2d):
+    def __init__(self, c1, c2, n=2, g=2, transition=True, e=0.5, act=nn.GELU, norm=FakeLayerNorm2d):
         super().__init__()
         self.c1 = c1
         self.c2 = c2
@@ -161,6 +161,9 @@ class MetaNeXt(nn.Module, ABC):
             act: Type[nn.Module]=nn.GELU,
             token_mixer: Type[nn.Module]=None):
         super().__init__()
+        
+        if (isinstance(act, str)): act = eval(act)
+        if (isinstance(norm, str)): norm = eval(norm)
         self.__ready = False
 
         self.c = c
