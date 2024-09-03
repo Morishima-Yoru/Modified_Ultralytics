@@ -11,7 +11,7 @@ from functools import partial
 from ..transformer import MLPBlock
 from ..conv import autopad
 from .normalization import *
-from .DCNv4 import *
+# from .DCNv4 import *
 
 class LayerNorm2d(nn.LayerNorm):
     r""" LayerNorm for channels_first tensors with 2d spatial dimensions (ie N, C, H, W).

@@ -347,25 +347,25 @@ class Seq_Test(Sequentially):
         return ResNetBlock(c, c, e=1)
 
 
-class DCNv4_Stage(Sequentially):
-    def __init__(self, c1, c2, n):
-        super().__init__(c1, c2, n)
-        self.norm = nn.BatchNorm2d(c2)
-        self.act = nn.GELU()
-        self.build()
+# class DCNv4_Stage(Sequentially):
+#     def __init__(self, c1, c2, n):
+#         super().__init__(c1, c2, n)
+#         self.norm = nn.BatchNorm2d(c2)
+#         self.act = nn.GELU()
+#         self.build()
         
-    def computational(self, c) -> nn.Module:
-        return nn.Sequential(
-            DCNv4(c, 3, 1, group=min(c//16, 4)),
-            nn.LayerNorm(c),
-            nn.GELU(),
-        )
+#     def computational(self, c) -> nn.Module:
+#         return nn.Sequential(
+#             DCNv4(c, 3, 1, group=min(c//16, 4)),
+#             nn.LayerNorm(c),
+#             nn.GELU(),
+#         )
 
-    def forward(self, x):
-        # Input: N, C, H, W
-        # DCNv4 Assert: N, L, C where L = H*W
-        N, C, H, W = x.shape
-        x = x.flatten(-2).transpose(1, 2).contiguous()
-        x = self.seq(x)
-        x = x.view(N, H, W, C).permute(0, 3, 1, 2).contiguous()
-        return x
+#     def forward(self, x):
+#         # Input: N, C, H, W
+#         # DCNv4 Assert: N, L, C where L = H*W
+#         N, C, H, W = x.shape
+#         x = x.flatten(-2).transpose(1, 2).contiguous()
+#         x = self.seq(x)
+#         x = x.view(N, H, W, C).permute(0, 3, 1, 2).contiguous()
+#         return x
