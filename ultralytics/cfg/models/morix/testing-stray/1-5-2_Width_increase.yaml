@@ -1,10 +1,17 @@
 
 nc: 1000
 scales: 
-  n: [0.33, 0.25, 1024]
+  n: [0.33, 1.00, 1024]
 
-# Using my own implement (GLEAN + DarknetBottleneck)
-# Using GELU and FakeLayerNorm.
+# 1-5-1 Failed to test (FLN).
+# Figuring out why nn.GroupNorm(1, dim) is illness.
+# In spect of Normalization process. 
+# the number of 16 (first stem conv of w_scale=0.25) is too small to maintained feature map to be an gaussian disbution.
+# Because the acteally work may have extreme small batch size. This problem must be fixed.
+
+# This changes Width scale from 0.25 to 1.0
+
+# Result: Still illness
 
 backbone:
   # [from, repeats, module, args]

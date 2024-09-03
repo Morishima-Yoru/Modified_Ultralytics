@@ -10,7 +10,8 @@ from functools import partial
 
 from ..transformer import MLPBlock
 from ..conv import autopad
-
+from .normalization import *
+from .DCNv4 import *
 
 class LayerNorm2d(nn.LayerNorm):
     r""" LayerNorm for channels_first tensors with 2d spatial dimensions (ie N, C, H, W).
@@ -68,11 +69,11 @@ class CNA(nn.Module):
                  act: Type[nn.Module]=nn.GELU, 
                  norm: Type[nn.Module]=FakeLayerNorm2d):
         super().__init__()
-        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         # Direct lint from yaml handle.
         if (isinstance(norm, str)): norm = eval(norm)
         if (isinstance(act,  str)): act  = eval(act)
-
+        
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         self.norm = norm(c2) if norm is not None else nn.Identity()
         self.act =  act()    if act  is not None else nn.Identity()
 

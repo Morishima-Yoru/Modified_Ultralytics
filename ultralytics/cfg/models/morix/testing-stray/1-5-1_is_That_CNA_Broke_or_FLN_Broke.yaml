@@ -1,0 +1,39 @@
+
+nc: 1000
+scales: 
+  n: [0.33, 0.25, 1024]
+
+# 1-5 Failed to test.
+# Same structure (stock YOLOv8n) is normal
+# Figuring out the broke block or operation
+# Diff:
+  # CNA
+    # nn.GELU
+    # nn.GroupNorm(1, dim) (FakeLayerNorm2d)
+  # ELAN_DarknetBottleneck
+    # GELAN_Wrapper
+      # nn.GELU
+      # nn.GroupNorm(1, dim)
+    # Exposed Bottleneck
+      # nn.GELU
+      # nn.GroupNorm(1, dim)
+
+# This changes FLN to BN back.
+
+# Result: FLN Broke.
+
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, CNA, [64,  3, 2, None, 1, 1, nn.GELU, nn.BatchNorm2d]] # 0-P1/2
+  - [-1, 1, CNA, [128, 3, 2, None, 1, 1, nn.GELU, nn.BatchNorm2d]] # 1-P2/4
+  - [-1, 3, ELAN_DarknetBottleneck, [128,  1, False, 0.5, nn.GELU, nn.BatchNorm2d]]
+  - [-1, 1, CNA, [256, 3, 2, None, 1, 1, nn.GELU, nn.BatchNorm2d]] # 3-P3/8
+  - [-1, 6, ELAN_DarknetBottleneck, [256,  1, False, 0.5, nn.GELU, nn.BatchNorm2d]]
+  - [-1, 1, CNA, [512, 3, 2, None, 1, 1, nn.GELU, nn.BatchNorm2d]] # 5-P4/16
+  - [-1, 6, ELAN_DarknetBottleneck, [512,  1, False, 0.5, nn.GELU, nn.BatchNorm2d]]
+  - [-1, 1, CNA, [1024, 3, 2, None, 1, 1, nn.GELU, nn.BatchNorm2d]] # 7-P5/32
+  - [-1, 3, ELAN_DarknetBottleneck, [1024, 1, False, 0.5, nn.GELU, nn.BatchNorm2d]]
+
+# YOLOv8.0n head
+head:
+  - [-1, 1, ClassificationHead, [nc]] # Classify
