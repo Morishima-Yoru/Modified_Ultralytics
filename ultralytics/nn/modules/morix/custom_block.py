@@ -1,12 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision.ops import DeformConv2d
 
 import numpy as np
 
 from ..block import ResNetBlock, Bottleneck
-from .custom_ops import *
+from .ops import *
 from .custom_wrapper import *
 
 
@@ -314,17 +313,15 @@ class ELAN(GELAN_Wrapper):
         self.build()
     
     def computational(self, c) -> nn.Module:
-        return CNA(c, c, 3, 1, act=self.act, norm=self.norm)
+        return CNA(c, c, 3, 1, act=self.act_t, norm=self.norm_t)
 
 class ELAN_DarknetBottleneck(GELAN_Wrapper):
     def __init__(self, c1, c2, n, g=1, transition=False, e=0.5, act=nn.SiLU, norm=nn.BatchNorm2d):
         super().__init__(c1, c2, n, g, transition, e, act, norm)
-        self.act = act
-        self.norm = norm
         self.build()
         
     def computational(self, c) -> nn.Module:
-        return DarknetBottleneck(c, c, True, e=1., act=self.act, norm=self.norm)
+        return DarknetBottleneck(c, c, True, e=1., act=self.act_t, norm=self.norm_t)
     
 
 class GELAN_MetaNeXt_Ident(GELAN_Wrapper):
@@ -346,26 +343,55 @@ class Seq_Test(Sequentially):
     def computational(self, c) -> nn.Module:
         return ResNetBlock(c, c, e=1)
 
+class GELAN_DeformConv(GELAN_Wrapper):
+    def __init__(self, c1, c2, n=2, g=2, transition=True, e=0.5, act=nn.GELU, norm=SwitchNorm2d):
+        super().__init__(c1, c2, n, g, transition, e, act, norm)
+        self.build()
+    
+    
+    class DCBottleneck(nn.Module):
+        """Standard bottleneck with activation and normalization exposed."""
 
-# class DCNv4_Stage(Sequentially):
-#     def __init__(self, c1, c2, n):
-#         super().__init__(c1, c2, n)
-#         self.norm = nn.BatchNorm2d(c2)
-#         self.act = nn.GELU()
-#         self.build()
-        
-#     def computational(self, c) -> nn.Module:
-#         return nn.Sequential(
-#             DCNv4(c, 3, 1, group=min(c//16, 4)),
-#             nn.LayerNorm(c),
-#             nn.GELU(),
-#         )
+        def __init__(self, c, shortcut=False, g=1, k=(3, 3), e=0.5, act=nn.GELU, norm=SwitchNorm2d):
+            """Initializes a standard bottleneck module with optional shortcut connection and configurable parameters."""
+            super().__init__()
+            self.cv1 = DeformConv2d_v4(c, 3, 1, group=c//16)
+            self.norm1 = norm(c)
+            self.act1 = act()
+            self.cv2 = DeformConv2d_v4(c, 3, 1, group=c//16)
+            self.norm2 = norm(c)
+            self.act2 = act()
+            self.add = shortcut
 
-#     def forward(self, x):
-#         # Input: N, C, H, W
-#         # DCNv4 Assert: N, L, C where L = H*W
-#         N, C, H, W = x.shape
-#         x = x.flatten(-2).transpose(1, 2).contiguous()
-#         x = self.seq(x)
-#         x = x.view(N, H, W, C).permute(0, 3, 1, 2).contiguous()
-#         return x
+        def forward(self, x):
+            a = self.act2(self.norm2(self.cv2(self.act1(self.norm1(self.cv1(x))))))
+            return a + x if self.add else a
+    
+    def computational(self, c) -> nn.Module:
+        return self.DCBottleneck(c, c, act=self.act_t, norm=self.norm_t)
+    
+class DCNv4_Stage(nn.Module):
+    def __init__(self, c1, c2, n):
+        super().__init__()
+        self.norm = nn.BatchNorm2d
+        self.act = nn.GELU
+        self.ca1 = CNA(c1, c1, act=self.act, norm=self.norm)
+        self.ca2 = CNA(c1, c1, act=self.act, norm=self.norm)
+        self.comp = self.computational(c1//2)
+        self.comp2 = self.computational(c1//2)
+    def computational(self, c) -> nn.Module:
+        return nn.Sequential(
+            DCNv4(c, 3, 1, group=min(c//16, 4)),
+            nn.LayerNorm(c),
+            nn.GELU(),
+        )
+
+    def forward(self, x):
+        # Input: N, C, H, W
+        # DCNv4 Assert: N, L, C where L = H*W
+        csp, x = self.ca1(x).chunk(2, 1)
+        N, C, H, W = x.shape
+        x = x.flatten(-2).transpose(1, 2).contiguous()
+        x = self.comp2(self.comp(x))
+        x = x.view(N, H, W, C).permute(0, 3, 1, 2).contiguous()
+        return self.ca2(torch.cat([csp, x], 1))

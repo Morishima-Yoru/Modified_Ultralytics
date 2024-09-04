@@ -104,7 +104,11 @@ class SwitchNorm2d(nn.Module):
         N, C, H, W = x.size()
         x = x.view(N, C, -1)
         mean_in = x.mean(-1, keepdim=True)
-        var_in = x.var(-1, keepdim=True)
+        # UserWarning: var(): degrees of freedom is <= 0. Correction should be strictly less than the reduction factor (input numel divided by output numel)
+        if (x.size(-1) > 1):
+            var_in = x.var(-1, keepdim=True)
+        else:
+            var_in = torch.zeros_like(mean_in)
 
         mean_ln = mean_in.mean(1, keepdim=True)
         temp = var_in + mean_in ** 2

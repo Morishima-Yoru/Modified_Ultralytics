@@ -16,7 +16,7 @@ from torch.autograd import Function
 from torch.autograd.function import once_differentiable
 import numpy as np
 
-from DCNv4 import ext
+from .. import ext
 
 shm_size_dict = {
     "8.0": 163000,

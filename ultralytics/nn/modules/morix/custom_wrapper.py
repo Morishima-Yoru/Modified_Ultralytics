@@ -9,7 +9,7 @@ from functools import partial
 import torch
 import torch.nn as nn
 
-from .custom_ops import *
+from .ops import *
     
 NO_COMPUTATIONAL_IMPLEMENTED = NotImplementedError("Attributes not initialized properly. You need to implement your computational method")
 NO_BUILD = NotImplementedError("Wrapper does not build properly. Call build() first.")
@@ -31,7 +31,7 @@ class GELAN_Wrapper(nn.Module, ABC):
         [1] C.-Y. Wang, I-H. Yeh, and H.-Y. M. Liao, "YOLOv9: Learning What You Want to Learn Using Programmable Gradient Information," arXiv preprint arXiv:2402.13616, Feb. 21, 2024.
         [2] C.-Y. Wang, H.-Y. M. Liao, and I-H. Yeh, "Designing Network Design Strategies Through Gradient Path Analysis," Journal of Information Science and Engineering, Vol. 39 No. 4, pp. 975-995, 2023.
     """
-    def __init__(self, c1, c2, n=2, g=2, transition=True, e=0.5, act=nn.GELU, norm=FakeLayerNorm2d):
+    def __init__(self, c1, c2, n=2, g=2, transition=True, e=0.5, act=nn.GELU, norm=nn.BatchNorm2d):
         super().__init__()
         self.c1 = c1
         self.c2 = c2
@@ -40,26 +40,28 @@ class GELAN_Wrapper(nn.Module, ABC):
         self.g = g
         self.transition = transition
         self.e = e
-        self.act = act
-        self.norm = norm
+        if (isinstance(act, str)):  act  = eval(act)
+        if (isinstance(norm, str)): norm = eval(norm)
+        self.act_t = act
+        self.norm_t = norm
         self.__ready = False
         
     def build(self) -> Self:
-        self.cv1 = CNA(self.c1, self.c2, 1, 1, act=self.act, norm=self.norm) 
-        self.ct1 = self.transition_layer((1 + self.n) * self.c, (1 + self.n) * self.c, k=1, act=self.act, norm=self.norm) \
+        self.cv1 = CNA(self.c1, self.c2, 1, 1, act=self.act_t, norm=self.norm_t) 
+        self.ct1 = self.transition_layer((1 + self.n) * self.c, (1 + self.n) * self.c, k=1, act=self.act_t, norm=self.norm_t) \
                 if self.transition else nn.Identity()
-        self.ct2 = CNA((2 + self.n) * self.c, self.c2, 1, act=self.act, norm=self.norm)
+        self.ct2 = CNA((2 + self.n) * self.c, self.c2, 1, act=self.act_t, norm=self.norm_t)
+        # Degrade the GELAN to CSP to prevent repeated CSP gradient.
+        # if (self.n == 1): self.ct2 = CNA(2 * self.c, self.c2, 1, act=self.act_t, norm=self.norm_t)
         self.r = nn.ModuleList([self.computational(self.c) for _ in range(self.g*self.n)])
         self.__ready = True
         return self
         
     def conv_norm_act(self, c1, c2, **kwargs) -> nn.Module:
-        _kwargs = self.filter_kwargs(CNA, **kwargs)
-        return CNA(c1, c2, **_kwargs)
+        return CNA(c1, c2, **kwargs)
     
     def transition_layer(self, c1, c2, **kwargs) -> nn.Module:
-        _kwargs = self.filter_kwargs(self.conv_norm_act, **kwargs)
-        return self.conv_norm_act(c1, c2, **_kwargs)
+        return self.conv_norm_act(c1, c2, **kwargs)
     
     @abstractmethod
     def computational(self, c) -> nn.Module:
@@ -97,11 +99,13 @@ class GELAN_Wrapper(nn.Module, ABC):
         csp, x = self.cv1(x).chunk(2, 1)
         densed = [x]
         x = self.computational_dimchange(x, 0)
-        for idx, itr in enumerate(self.r, start=1):
+        for idx, itr in enumerate(self.r, start=0):
             x = itr(x)
-            if idx % self.g == 0:
+            if ((idx+1) % self.g == 0):
                 densed.append(self.computational_dimchange(x, 1))
-                
+        # if (self.n == 1):
+        #     # Degrade the GELAN to CSP to prevent repeated CSP gradient.
+        #     return self.ct2(torch.cat([csp, *(densed[1:])], 1))
         if (self.transition is False): 
             return self.ct2(torch.cat([csp, *densed], 1))
         return self.ct2(torch.cat([csp, self.ct1(torch.cat(densed, 1))], 1))

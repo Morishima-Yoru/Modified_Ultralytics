@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 import numpy as np
 
-from .custom_ops import *
+from .ops import *
 from .custom_wrapper import *
 
 class ClassificationHead(nn.Module):
