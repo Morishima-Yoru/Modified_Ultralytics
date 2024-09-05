@@ -1,0 +1,24 @@
+
+nc: 1000 
+scales:
+  n: [0.33, 0.5, 1024]
+
+# DCNv4 requires Layer Normalization. 
+# Train doesn't converge when using Batch Normalization to DCNv4.
+
+# In this file. The DCNFormer have exposed norm layer settings for further reserach.
+
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, CNA, [64,   3, 2, None, 1, 1, nn.GELU, SwitchNorm2d]] # 0-P1/2
+  - [-1, 1, CNA, [128,  3, 2, None, 1, 1, nn.GELU, SwitchNorm2d]] # 1-P2/4
+  - [-1, 3, CSP_DCNFormer, [128 , None, True, True, 4, 0., 0., None, None, nn.GELU, SwitchNorm2d]]
+  - [-1, 1, CNA, [256,  3, 2, None, 1, 1, nn.GELU, SwitchNorm2d]] # 3-P3/8
+  - [-1, 6, CSP_DCNFormer, [256 , None, True, True, 4, 0., 0., None, None, nn.GELU, SwitchNorm2d]]
+  - [-1, 1, CNA, [512,  3, 2, None, 1, 1, nn.GELU, SwitchNorm2d]] # 5-P4/16
+  - [-1, 6, CSP_DCNFormer, [512 , None, True, True, 4, 0., 0., None, None, nn.GELU, SwitchNorm2d]]
+  - [-1, 1, CNA, [1024, 3, 2, None, 1, 1, nn.GELU, SwitchNorm2d]] # 7-P5/32
+  - [-1, 3, CSP_DCNFormer, [1024, None, True, True, 4, 0., 0., None, None, nn.GELU, SwitchNorm2d]]
+  
+head:
+  - [-1, 1, ClassificationHead, [nc]] 

@@ -84,7 +84,7 @@ def format_convert(x: torch.Tensor,
     if (convert is None):
         raise ValueError(f"Conversion from {fmt_from} to {fmt_to} is not supported.")
         
-    return convert(x.contiguous())
+    return convert(x).contiguous()
 
 def get_HW_shape(x: torch.Tensor, fmt: e_Format | int | str) -> tuple:
     fmt = e_Format.to_enum(fmt)

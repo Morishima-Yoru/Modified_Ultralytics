@@ -1,5 +1,9 @@
+from functools import partial
+import inspect, warnings
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.autograd import Function
 from torch.nn.parameter import Parameter
 from torch.nn.modules.module import Module
@@ -385,3 +389,38 @@ class SyncSwitchableNorm2d(Module):
         return SyncSNFunc.apply(
                     in_data, self.weight, self.bias, self.mean_weight, self.var_weight, self.running_mean, self.running_var, self.eps, self.momentum, self.training)
         
+class LayerNorm2d(nn.LayerNorm):
+    r""" LayerNorm for channels_first tensors with 2d spatial dimensions (ie N, C, H, W).
+    """
+
+    def __init__(self, normalized_shape, eps=1e-6):
+        super().__init__(normalized_shape, eps=eps)
+
+    def forward(self, x) -> torch.Tensor:
+        if x.is_contiguous():
+            return F.layer_norm(
+                x.permute(0, 2, 3, 1), self.normalized_shape, self.weight, self.bias, self.eps).permute(0, 3, 1, 2)
+        else:
+            s, u = torch.var_mean(x, dim=1, keepdim=True)
+            x = (x - u) * torch.rsqrt(s + self.eps)
+            x = x * self.weight[:, None, None] + self.bias[:, None, None]
+            return x
+
+class FakeLayerNorm2d(nn.GroupNorm):
+    """
+    https://discuss.pytorch.org/t/groupnorm-num-groups-1-and-layernorm-are-not-equivalent/145468/2
+
+    Args:
+        nn (_type_): _description_
+    """
+    def __init__(self, num_channels: int, eps: float = 0.00001, affine: bool = True, device=None, dtype=None):
+        warnings.warn(
+            "nn.GroupNorm(1, dim) are NOT equivent to nn.LayerNorm(dim)! \nRefers: \
+                https://discuss.pytorch.org/t/groupnorm-num-groups-1-and-layernorm-are-not-equivalent/145468/2",
+            DeprecationWarning,
+        )
+        super().__init__(1, num_channels, eps, affine, device, dtype)
+
+SwitchNorm1dNoBatch = partial(SwitchNorm1d, using_bn=False)
+SwitchNorm2dNoBatch = partial(SwitchNorm2d, using_bn=False)
+SwitchNorm3dNoBatch = partial(SwitchNorm3d, using_bn=False)

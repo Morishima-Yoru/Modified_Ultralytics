@@ -23,3 +23,4 @@ class ClassificationHead(nn.Module):
             x = torch.cat(x, 1)
         x = self.linear(self.drop(self.pool(x).flatten(1)))
         return x if self.training else x.softmax(1)
+

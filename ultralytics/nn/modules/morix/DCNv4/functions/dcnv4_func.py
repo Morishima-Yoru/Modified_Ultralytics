@@ -60,8 +60,8 @@ def find_spec_bwd(B, H, W, G, C):
     return d_stride, n_thread
 
 class DCNv4Function(Function):
-    @staticmethod
-    @custom_fwd(device_type='cuda')
+    @staticmethod 
+    @custom_fwd(device_type='cuda', cast_inputs=torch.float)
     def forward(
             ctx, input, offset_mask,
             kernel_h, kernel_w, stride_h, stride_w,

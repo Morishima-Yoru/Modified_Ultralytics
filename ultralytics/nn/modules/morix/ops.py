@@ -7,6 +7,7 @@ import numpy as np
 import math
 
 from functools import partial
+import inspect
 
 from ..transformer import MLPBlock
 from ..conv import autopad
@@ -19,52 +20,6 @@ from torch.nn.init import xavier_uniform_, constant_
 from .DCNv4.functions import DCNv4Function
 
 NO_FORMAT_SUPPORT = lambda a, b: NotImplementedError("Format not support. Support format: {}, got: {}".format(a, b))
-
-
-class LayerNorm2d(nn.LayerNorm):
-    r""" LayerNorm for channels_first tensors with 2d spatial dimensions (ie N, C, H, W).
-        https://discuss.pytorch.org/t/groupnorm-num-groups-1-and-layernorm-are-not-equivalent/145468/2
-    
-        normalized_shape (int): C from an expected input of size (N, C, H, W)
-        eps (float, optional): A value added to the denominator for numerical stability. Default: 1e-6
-    """
-
-    def __init__(self, normalized_shape, eps=1e-6):
-        super().__init__(normalized_shape, eps=eps)
-
-    @staticmethod
-    def _is_contiguous(tensor: torch.Tensor) -> bool:
-        if torch.jit.is_scripting():
-            return tensor.is_contiguous()
-        else:
-            return tensor.is_contiguous(memory_format=torch.contiguous_format)
-    
-    def forward(self, x) -> torch.Tensor:
-        if self._is_contiguous(x):
-            return F.layer_norm(
-                x.permute(0, 2, 3, 1), self.normalized_shape, self.weight, self.bias, self.eps).permute(0, 3, 1, 2)
-        else:
-            return F.layer_norm(
-                x.permute(0, 2, 3, 1).contiguous(), self.normalized_shape, self.weight, self.bias, self.eps).permute(0, 3, 1, 2).contiguous()
-
-class CenterFeatureScaleModule(nn.Module):
-    def forward(self,
-                query,
-                center_feature_scale_proj_weight,
-                center_feature_scale_proj_bias):
-        center_feature_scale = F.linear(query,
-                                        weight=center_feature_scale_proj_weight,
-                                        bias=center_feature_scale_proj_bias).sigmoid()
-        return center_feature_scale
-class FakeLayerNorm2d(nn.GroupNorm):
-    """
-    https://discuss.pytorch.org/t/groupnorm-num-groups-1-and-layernorm-are-not-equivalent/145468/2
-
-    Args:
-        nn (_type_): _description_
-    """
-    def __init__(self, num_channels: int, eps: float = 0.00001, affine: bool = True, device=None, dtype=None):
-        super().__init__(1, num_channels, eps, affine, device, dtype)
 
 class CNA(nn.Module):
     """Classic Convolution-Normalization-Activation topology
@@ -132,6 +87,17 @@ class InceptionDWConv2d(nn.Module):
             (x_id, self.dwconv_hw(x_hw), self.dwconv_w(x_w), self.dwconv_h(x_h)), 
             dim=1,
         )
+
+class Scale(nn.Module):
+    """
+    Scale vector by element multiplications.
+    """
+    def __init__(self, dim, init_value=1.0, trainable=True):
+        super().__init__()
+        self.scale = nn.Parameter(init_value * torch.ones(dim), requires_grad=trainable)
+
+    def forward(self, x):
+        return x * self.scale    
         
 class ConvMLP(nn.Module):
     def __init__(
@@ -173,142 +139,6 @@ class ConvMLP(nn.Module):
         x = self.fc2(x)
         return x
 
-def window_partition(x, window_size):
-    """
-    Args:
-        x: (B, H, W, C)
-        window_size (int): window size
-
-    Returns:
-        windows: (num_windows*B, window_size, window_size, C)
-    """
-    B, H, W, C = x.shape
-    x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
-    windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
-    return windows
-
-def window_reverse(windows, window_size, H, W):
-    """
-    Args:
-        windows: (num_windows*B, window_size, window_size, C)
-        window_size (int): Window size
-        H (int): Height of image
-        W (int): Width of image
-
-    Returns:
-        x: (B, H, W, C)
-    """
-    B = int(windows.shape[0] / (H * W / window_size / window_size))
-    x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
-    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
-    return x
-
-class WindowAttention(nn.Module):
-    r""" Window based multi-head self attention (W-MSA) module with relative position bias.
-    It supports both of shifted and non-shifted window.
-
-    Args:
-        dim (int): Number of input channels.
-        window_size (tuple[int]): The height and width of the window.
-        num_heads (int): Number of attention heads.
-        qkv_bias (bool, optional):  If True, add a learnable bias to query, key, value. Default: True
-        attn_drop (float, optional): Dropout ratio of attention weight. Default: 0.0
-        proj_drop (float, optional): Dropout ratio of output. Default: 0.0
-    """
-
-    def __init__(self, dim, window_size, num_heads, qkv_bias=True, attn_drop=0., proj_drop=0.,):
-        super().__init__()
-        self.dim = dim
-        self.window_size = window_size  # Wh, Ww
-        self.num_heads = num_heads
-
-        self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((num_heads, 1, 1))), requires_grad=True)
-
-        # mlp to generate continuous relative position bias
-        self.cpb_mlp = nn.Sequential(nn.Linear(2, 512, bias=True),
-                                     nn.GELU(),
-                                     nn.Linear(512, num_heads, bias=False))
-
-        # get relative_coords_table
-        relative_coords_h = torch.arange(-(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32)
-        relative_coords_w = torch.arange(-(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32)
-        relative_coords_table = torch.stack(
-            torch.meshgrid([relative_coords_h,
-                            relative_coords_w])).permute(1, 2, 0).contiguous().unsqueeze(0)  # 1, 2*Wh-1, 2*Ww-1, 2
-
-        relative_coords_table[:, :, :, 0] /= (self.window_size[0] - 1)
-        relative_coords_table[:, :, :, 1] /= (self.window_size[1] - 1)
-        relative_coords_table *= 8  # normalize to -8, 8
-        relative_coords_table = torch.sign(relative_coords_table) * torch.log2(
-            torch.abs(relative_coords_table) + 1.0) / np.log2(8)
-
-        self.register_buffer("relative_coords_table", relative_coords_table)
-
-        # get pair-wise relative position index for each token inside the window
-        coords_h = torch.arange(self.window_size[0])
-        coords_w = torch.arange(self.window_size[1])
-        coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
-        coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
-        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
-        relative_coords[:, :, 0] += self.window_size[0] - 1  # shift to start from 0
-        relative_coords[:, :, 1] += self.window_size[1] - 1
-        relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
-        relative_position_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
-        self.register_buffer("relative_position_index", relative_position_index)
-
-        self.qkv = nn.Linear(dim, dim * 3, bias=False)
-        if qkv_bias:
-            self.q_bias = nn.Parameter(torch.zeros(dim))
-            self.v_bias = nn.Parameter(torch.zeros(dim))
-        else:
-            self.q_bias = None
-            self.v_bias = None
-        self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
-        self.proj_drop = nn.Dropout(proj_drop)
-        self.softmax = nn.Softmax(dim=-1)
-
-    def forward(self, x, mask=None):
-        """
-        Args:
-            x: input features with shape of (num_windows*B, N, C)
-            mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
-        """
-        B_, N, C = x.shape
-        qkv_bias = None
-        if self.q_bias is not None:
-            qkv_bias = torch.cat((self.q_bias, torch.zeros_like(self.v_bias, requires_grad=False), self.v_bias))
-        qkv = F.linear(input=x, weight=self.qkv.weight, bias=qkv_bias)
-        qkv = qkv.reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4).contiguous()
-        q, k, v = qkv.unbind(0)  # make torchscript happy (cannot use tensor as tuple)
-
-        # cosine attention
-        attn = (F.normalize(q, dim=-1) @ F.normalize(k, dim=-1).transpose(-2, -1))
-        logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01, device=self.logit_scale.device))).exp()
-        attn = attn * logit_scale
-
-        relative_position_bias_table = self.cpb_mlp(self.relative_coords_table).view(-1, self.num_heads)
-        relative_position_bias = relative_position_bias_table[self.relative_position_index.view(-1)].view(
-            self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
-        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
-        relative_position_bias = 16 * torch.sigmoid(relative_position_bias)
-        attn = attn + relative_position_bias.unsqueeze(0)
-
-        if mask is not None:
-            nW = mask.shape[0]
-            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
-            attn = attn.view(-1, self.num_heads, N, N)
-            attn = self.softmax(attn)
-        else:
-            attn = self.softmax(attn)
-            
-        attn = self.attn_drop(attn)
-        x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
-        x = self.proj(x)
-        x = self.proj_drop(x)
-        return x
-
 class DropPath(nn.Module):
     def __init__(self, drop_prob=None):
         super(DropPath, self).__init__()
@@ -344,6 +174,141 @@ class SwinV2Block(nn.Module):
         act_layer (nn.Module, optional): Activation layer. Default: nn.GELU
         norm_layer (nn.Module, optional): Normalization layer.  Default: nn.LayerNorm
     """
+    @staticmethod
+    def window_partition(x, window_size):
+        """
+        Args:
+            x: (B, H, W, C)
+            window_size (int): window size
+
+        Returns:
+            windows: (num_windows*B, window_size, window_size, C)
+        """
+        B, H, W, C = x.shape
+        x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
+        windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
+        return windows
+    @staticmethod
+    def window_reverse(windows, window_size, H, W):
+        """
+        Args:
+            windows: (num_windows*B, window_size, window_size, C)
+            window_size (int): Window size
+            H (int): Height of image
+            W (int): Width of image
+
+        Returns:
+            x: (B, H, W, C)
+        """
+        B = int(windows.shape[0] / (H * W / window_size / window_size))
+        x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
+        x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
+        return x
+    class WindowAttention(nn.Module):
+        r""" Window based multi-head self attention (W-MSA) module with relative position bias.
+        It supports both of shifted and non-shifted window.
+
+        Args:
+            dim (int): Number of input channels.
+            window_size (tuple[int]): The height and width of the window.
+            num_heads (int): Number of attention heads.
+            qkv_bias (bool, optional):  If True, add a learnable bias to query, key, value. Default: True
+            attn_drop (float, optional): Dropout ratio of attention weight. Default: 0.0
+            proj_drop (float, optional): Dropout ratio of output. Default: 0.0
+        """
+
+        def __init__(self, dim, window_size, num_heads, qkv_bias=True, attn_drop=0., proj_drop=0.,):
+            super().__init__()
+            self.dim = dim
+            self.window_size = window_size  # Wh, Ww
+            self.num_heads = num_heads
+
+            self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((num_heads, 1, 1))), requires_grad=True)
+
+            # mlp to generate continuous relative position bias
+            self.cpb_mlp = nn.Sequential(nn.Linear(2, 512, bias=True),
+                                        nn.GELU(),
+                                        nn.Linear(512, num_heads, bias=False))
+
+            # get relative_coords_table
+            relative_coords_h = torch.arange(-(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32)
+            relative_coords_w = torch.arange(-(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32)
+            relative_coords_table = torch.stack(
+                torch.meshgrid([relative_coords_h,
+                                relative_coords_w])).permute(1, 2, 0).contiguous().unsqueeze(0)  # 1, 2*Wh-1, 2*Ww-1, 2
+
+            relative_coords_table[:, :, :, 0] /= (self.window_size[0] - 1)
+            relative_coords_table[:, :, :, 1] /= (self.window_size[1] - 1)
+            relative_coords_table *= 8  # normalize to -8, 8
+            relative_coords_table = torch.sign(relative_coords_table) * torch.log2(
+                torch.abs(relative_coords_table) + 1.0) / np.log2(8)
+
+            self.register_buffer("relative_coords_table", relative_coords_table)
+
+            # get pair-wise relative position index for each token inside the window
+            coords_h = torch.arange(self.window_size[0])
+            coords_w = torch.arange(self.window_size[1])
+            coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
+            coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
+            relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
+            relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
+            relative_coords[:, :, 0] += self.window_size[0] - 1  # shift to start from 0
+            relative_coords[:, :, 1] += self.window_size[1] - 1
+            relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
+            relative_position_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
+            self.register_buffer("relative_position_index", relative_position_index)
+
+            self.qkv = nn.Linear(dim, dim * 3, bias=False)
+            if qkv_bias:
+                self.q_bias = nn.Parameter(torch.zeros(dim))
+                self.v_bias = nn.Parameter(torch.zeros(dim))
+            else:
+                self.q_bias = None
+                self.v_bias = None
+            self.attn_drop = nn.Dropout(attn_drop)
+            self.proj = nn.Linear(dim, dim)
+            self.proj_drop = nn.Dropout(proj_drop)
+            self.softmax = nn.Softmax(dim=-1)
+
+        def forward(self, x, mask=None):
+            """
+            Args:
+                x: input features with shape of (num_windows*B, N, C)
+                mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
+            """
+            B_, N, C = x.shape
+            qkv_bias = None
+            if self.q_bias is not None:
+                qkv_bias = torch.cat((self.q_bias, torch.zeros_like(self.v_bias, requires_grad=False), self.v_bias))
+            qkv = F.linear(input=x, weight=self.qkv.weight, bias=qkv_bias)
+            qkv = qkv.reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4).contiguous()
+            q, k, v = qkv.unbind(0)  # make torchscript happy (cannot use tensor as tuple)
+
+            # cosine attention
+            attn = (F.normalize(q, dim=-1) @ F.normalize(k, dim=-1).transpose(-2, -1))
+            logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01, device=self.logit_scale.device))).exp()
+            attn = attn * logit_scale
+
+            relative_position_bias_table = self.cpb_mlp(self.relative_coords_table).view(-1, self.num_heads)
+            relative_position_bias = relative_position_bias_table[self.relative_position_index.view(-1)].view(
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
+            relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+            relative_position_bias = 16 * torch.sigmoid(relative_position_bias)
+            attn = attn + relative_position_bias.unsqueeze(0)
+
+            if mask is not None:
+                nW = mask.shape[0]
+                attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
+                attn = attn.view(-1, self.num_heads, N, N)
+                attn = self.softmax(attn)
+            else:
+                attn = self.softmax(attn)
+                
+            attn = self.attn_drop(attn)
+            x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
+            x = self.proj(x)
+            x = self.proj_drop(x)
+            return x
 
     def __init__(self, dim, num_heads, window_size=7, shift_size=0,
                  mlp_ratio=4., qkv_bias=True, drop=0., attn_drop=0., drop_path=0.,
@@ -357,7 +322,7 @@ class SwinV2Block(nn.Module):
         assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
 
         self.norm1 = norm_layer(dim)
-        self.attn = WindowAttention(
+        self.attn = self.WindowAttention(
             dim, window_size=(self.window_size, self.window_size), num_heads=num_heads,
             qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop,)
 
@@ -388,7 +353,7 @@ class SwinV2Block(nn.Module):
             shifted_x = x
 
         # partition windows
-        x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+        x_windows = self.window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
         x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
 
         # W-MSA/SW-MSA
@@ -396,7 +361,7 @@ class SwinV2Block(nn.Module):
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
-        shifted_x = window_reverse(attn_windows, self.window_size, Hp, Wp)  # B H' W' C
+        shifted_x = self.window_reverse(attn_windows, self.window_size, Hp, Wp)  # B H' W' C
 
         # reverse cyclic shift
         if self.shift_size > 0:
@@ -412,144 +377,30 @@ class SwinV2Block(nn.Module):
         x = x + self.drop_path(self.norm2(self.mlp(x)))
         return x
 
-class DCNv4(nn.Module):
-    def __init__(
-            self,
-            channels=64,
-            kernel_size=3,
-            stride=1,
-            pad=1,
-            dilation=1,
-            group=4,
-            offset_scale=1.0,
-            dw_kernel_size=None,
-            center_feature_scale=False,
-            remove_center=False,
-            output_bias=True,
-            without_pointwise=False,
-            **kwargs):
-        """
-        DCNv4 Module
-        :param channels
-        :param kernel_size
-        :param stride
-        :param pad
-        :param dilation
-        :param group
-        :param offset_scale
-        :param act_layer
-        :param norm_layer
-        """
-        super().__init__()
-        if channels % group != 0:
-            raise ValueError(
-                f'channels must be divisible by group, but got {channels} and {group}')
-        _d_per_group = channels // group
-
-        # you'd better set _d_per_group to a power of 2 which is more efficient in our CUDA implementation
-        assert _d_per_group % 16 == 0
-
-        self.offset_scale = offset_scale
-        self.channels = channels
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.dilation = dilation
-        self.pad = pad
-        self.group = group
-        self.group_channels = channels // group
-        self.offset_scale = offset_scale
-        self.dw_kernel_size = dw_kernel_size
-        self.center_feature_scale = center_feature_scale
-        self.remove_center = int(remove_center)
-        self.without_pointwise = without_pointwise
-
-        self.K =  group * (kernel_size * kernel_size - self.remove_center)
-        if dw_kernel_size is not None:
-            self.offset_mask_dw = nn.Conv2d(channels, channels, dw_kernel_size, stride=1, padding=(dw_kernel_size - 1) // 2, groups=channels)
-        self.offset_mask = nn.Linear(channels, int(math.ceil((self.K * 3)/8)*8))
-        if not without_pointwise:
-            self.value_proj = nn.Linear(channels, channels)
-            self.output_proj = nn.Linear(channels, channels, bias=output_bias)
-        self._reset_parameters()
-
-        if center_feature_scale:
-            self.center_feature_scale_proj_weight = nn.Parameter(
-                torch.zeros((group, channels), dtype=torch.float))
-            self.center_feature_scale_proj_bias = nn.Parameter(
-                torch.tensor(0.0, dtype=torch.float).view((1,)).repeat(group, ))
-            self.center_feature_scale_module = CenterFeatureScaleModule()
-
-    def _reset_parameters(self):
-        constant_(self.offset_mask.weight.data, 0.)
-        constant_(self.offset_mask.bias.data, 0.)
-        if not self.without_pointwise:
-            xavier_uniform_(self.value_proj.weight.data)
-            constant_(self.value_proj.bias.data, 0.)
-            xavier_uniform_(self.output_proj.weight.data)
-            if self.output_proj.bias is not None:
-                constant_(self.output_proj.bias.data, 0.)
-
-    def forward(self, input, shape=None):
-        """
-        :param query                       (N, H, W, C)
-        :return output                     (N, H, W, C)
-        """
-        N, L, C = input.shape
-        if shape is not None:
-            H, W = shape
-        else:
-            H, W = int(L**0.5), int(L**0.5)
-
-
-        x = input
-        if not self.without_pointwise:
-            x = self.value_proj(x)
-        x = x.reshape(N, H, W, -1)
-        if self.dw_kernel_size is not None:
-            offset_mask_input = self.offset_mask_dw(input.view(N, H, W, C).permute(0, 3, 1, 2))
-            offset_mask_input = offset_mask_input.permute(0, 2, 3, 1).view(N, L, C)
-        else:
-            offset_mask_input = input
-        offset_mask = self.offset_mask(offset_mask_input).reshape(N, H, W, -1)
-
-        x_proj = x
-
-        x = DCNv4Function.apply(
-            x, offset_mask,
-            self.kernel_size, self.kernel_size,
-            self.stride, self.stride,
-            self.pad, self.pad,
-            self.dilation, self.dilation,
-            self.group, self.group_channels,
-            self.offset_scale,
-            256,
-            self.remove_center
-            )
-
-        if self.center_feature_scale:
-            center_feature_scale = self.center_feature_scale_module(
-                x, self.center_feature_scale_proj_weight, self.center_feature_scale_proj_bias)
-            center_feature_scale = center_feature_scale[..., None].repeat(
-                1, 1, 1, 1, self.channels // self.group).flatten(-2)
-            x = x * (1 - center_feature_scale) + x_proj * center_feature_scale
-
-        x = x.view(N, L, -1)
-
-        if not self.without_pointwise:
-            x = self.output_proj(x)
-        return x
-
-
-
 class DeformConv2d_v4(nn.Module):
+    SUPPORT_FORMAT = {
+        "channel_first": e_Format.BCHW,
+        "channel_last":  e_Format.BHWC,
+    }    
+    class CenterFeatureScaleModule(nn.Module):
+        def forward(self,
+                    query,
+                    center_feature_scale_proj_weight,
+                    center_feature_scale_proj_bias):
+            center_feature_scale = F.linear(query,
+                                            weight=center_feature_scale_proj_weight,
+                                            bias=center_feature_scale_proj_bias).sigmoid()
+            return center_feature_scale
+
     def __init__(
             self,
-            channels=64,
+            c1: int=64,
+            c2: int=None,
             kernel_size=3,
             stride=1,
             pad=None,
             dilation=1,
-            group=1,
+            group: int=None,
             offset_scale=1.0,
             data_format='channel_first',
             dw_kernel_size=None,
@@ -562,51 +413,63 @@ class DeformConv2d_v4(nn.Module):
         DCNv4 Module
         """
         super().__init__()
-        if channels % group != 0:
+        # Set group to maximum possible value with DCNv4 if no specific group given.
+        if (group is None): group = c1 // 16
+        
+        # Set output channels to default (As same as input)
+        if (c2 == None): c2 = c1
+        # Check channels input and output. Output channels different with input without pointwise are ambiguous
+        if ((c1 != c2) and without_pointwise):
             raise ValueError(
-                f'channels must be divisible by group, but got {channels} and {group}')
-        _d_per_group = channels // group
+                f"Output channels different with input without pointwise are ambiguous.\nGiven: c1: {c1}, c2: {c2}")
+        
+        if c1 % group != 0:
+            raise ValueError(
+                f'channels must be divisible by group, but got {c1} and {group}')
+        assert (c1 // group) % 16 == 0, "you'd better set _d_per_group to a power of 2 which is more efficient in our CUDA implementation"
 
-        assert _d_per_group % 16 == 0, "you'd better set _d_per_group to a power of 2 which is more efficient in our CUDA implementation"
+        if (data_format.lower() not in self.SUPPORT_FORMAT.keys()):
+            raise NO_FORMAT_SUPPORT(self.SUPPORT_FORMAT.keys(), self.data_format)
 
         self.offset_scale = offset_scale
-        self.channels = channels
+        self.channels = c1
         self.kernel_size = kernel_size
         self.stride = stride
         self.dilation = dilation
         self.pad = autopad(kernel_size, pad, dilation)
         self.group = group
-        self.group_channels = channels // group
+        self.group_channels = c1 // group
         self.offset_scale = offset_scale
         self.dw_kernel_size = dw_kernel_size
         self.center_feature_scale = center_feature_scale
         self.remove_center = int(remove_center)
         self.without_pointwise = without_pointwise
 
-        self.SUPPORT_FORMAT = {
-            "channel_first": e_Format.BCHW,
-            "channel_last":  e_Format.BHWC,
-            "blc":           e_Format.BLC,
-        }
-        if (data_format.lower() not in self.SUPPORT_FORMAT.keys()):
-            raise NO_FORMAT_SUPPORT(self.SUPPORT_FORMAT.keys(), self.data_format)
         self.data_format = self.SUPPORT_FORMAT[data_format]
 
         self.K =  group * (kernel_size * kernel_size - self.remove_center)
-        if dw_kernel_size is not None:
-            self.offset_mask_dw = nn.Conv2d(channels, channels, dw_kernel_size, stride=1, padding=(dw_kernel_size - 1) // 2, groups=channels)
-        self.offset_mask = nn.Linear(channels, int(math.ceil((self.K * 3)/8)*8))
+        
+        if (dw_kernel_size is not None):
+              self.offset_mask_dw = nn.Conv2d(c1, c1, dw_kernel_size, stride=1, padding=(dw_kernel_size - 1) // 2, groups=c1)
+        else: self.offset_mask_dw = nn.Identity()
+        
+        self.offset_mask = nn.Conv2d(c1, int(math.ceil((self.K * 3)/8)*8), 1)
+        
         if not without_pointwise:
-            self.value_proj = nn.Linear(channels, channels)
-            self.output_proj = nn.Linear(channels, channels, bias=output_bias)
+            self.value_proj  = nn.Conv2d(c1, c1, 1)
+            self.output_proj = nn.Conv2d(c1, c2, 1, bias=output_bias)
+        else:             
+            self.value_proj  = nn.Identity()
+            self.output_proj = nn.Identity()
+
         self._reset_parameters()
 
         if center_feature_scale:
             self.center_feature_scale_proj_weight = nn.Parameter(
-                torch.zeros((group, channels), dtype=torch.float))
+                torch.zeros((group, c1)))
             self.center_feature_scale_proj_bias = nn.Parameter(
-                torch.tensor(0.0, dtype=torch.float).view((1,)).repeat(group, ))
-            self.center_feature_scale_module = CenterFeatureScaleModule()
+                torch.tensor(0.0).view((1,)).repeat(group, ))
+            self.center_feature_scale_module = self.CenterFeatureScaleModule()
 
     def _reset_parameters(self):
         constant_(self.offset_mask.weight.data, 0.)
@@ -619,28 +482,17 @@ class DeformConv2d_v4(nn.Module):
                 constant_(self.output_proj.bias.data, 0.)
 
     def forward(self, x):
-        return self._forward(x)
-    
-    def _forward(self, x):
-        B, C, H, W = x.shape
-        
-        x_bchw = x
-        x_bhwc = x.permute(0, 2, 3, 1).contiguous() # B, H, W, C
-        x_blc = x.view(B, H*W, C).contiguous()    # B, H*W,  C
-        
-        if not self.without_pointwise:
-            x1 = self.value_proj(x_blc)
-        x1 = x1.reshape(B, H, W, -1)
-        if self.dw_kernel_size is not None:
-            offset_mask_input = self.offset_mask_dw(x_bchw).permute(0, 2, 3, 1).contiguous().view(B, H*W, C)
-        else:
-            offset_mask_input = x_blc
-        offset_mask = self.offset_mask(offset_mask_input).reshape(B, H, W, -1)
+        # nn.Conv2d requires BCHW shapes.
+        x = format_convert(x, self.data_format, e_Format.BCHW)
+        x_proj = self.value_proj(x)
+        offset_mask_input = self.offset_mask_dw(x)
+        offset_mask = self.offset_mask(offset_mask_input)
 
-        x_proj = x1
-
-        x1 = DCNv4Function.apply(
-            x1, offset_mask,
+        # Deformable Conv v4 requires BHWC shapes.
+        x_proj =      format_convert(x_proj     , e_Format.BCHW, e_Format.BHWC)
+        offset_mask = format_convert(offset_mask, e_Format.BCHW, e_Format.BHWC)
+        x = DCNv4Function.apply(
+            x_proj, offset_mask,
             self.kernel_size, self.kernel_size,
             self.stride, self.stride,
             self.pad, self.pad,
@@ -651,20 +503,20 @@ class DeformConv2d_v4(nn.Module):
             self.remove_center
             )
 
-        if self.center_feature_scale:
+        if (self.center_feature_scale):
             center_feature_scale = self.center_feature_scale_module(
-                x1, self.center_feature_scale_proj_weight, self.center_feature_scale_proj_bias)
+                x, self.center_feature_scale_proj_weight, self.center_feature_scale_proj_bias)
             center_feature_scale = center_feature_scale[..., None].repeat(
                 1, 1, 1, 1, self.channels // self.group).flatten(-2)
-            x1 = x1 * (1 - center_feature_scale) + x_proj * center_feature_scale
+            x = x * (1 - center_feature_scale) + x_proj * center_feature_scale
 
-        if not self.without_pointwise:
-            x1 = x1.view(B, H*W, C)
-            x1 = self.output_proj(x1)
-            x1 = x1.view(B, H, W, C)
+        # Convert back before Pointwise Conv/Return.
+        x = format_convert(x, e_Format.BHWC, e_Format.BCHW)
+        x = self.output_proj(x)
         
-        return x1.permute(0, 3, 1, 2).contiguous()
-    
+        # Convert to original input shape.
+        return format_convert(x, e_Format.BCHW, self.data_format)
+        
 class DarknetBottleneck(nn.Module):
     """Standard bottleneck with activation and normalization exposed."""
 

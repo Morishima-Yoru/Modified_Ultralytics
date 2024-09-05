@@ -3,17 +3,22 @@ nc: 1000
 scales:
   n: [0.33, 0.5, 1024]
 
+# DCNv4 requires Layer Normalization. 
+# Train doesn't converge when using Batch Normalization.
+
+# In this class (Stage_PureDCNv4) the Normalization has been fixed to LayerNorm2d.
+
 backbone:
   # [from, repeats, module, args]
   - [-1, 1, CNA, [64,   3, 2, None, 1, 1, nn.GELU, nn.BatchNorm2d]] # 0-P1/2
   - [-1, 1, CNA, [128,  3, 2, None, 1, 1, nn.GELU, nn.BatchNorm2d]] # 1-P2/4
-  - [-1, 3, GELAN_DCNv4, [128 , 2, None, True, nn.GELU, nn.BatchNorm2d]]
+  - [-1, 3, Stage_PureDCNv4, [128 , None, nn.GELU]]
   - [-1, 1, CNA, [256,  3, 2, None, 1, 1, nn.GELU, nn.BatchNorm2d]] # 3-P3/8
-  - [-1, 6, GELAN_DCNv4, [256 , 2, None, True, nn.GELU, nn.BatchNorm2d]]
+  - [-1, 6, Stage_PureDCNv4, [256 , None, nn.GELU]]
   - [-1, 1, CNA, [512,  3, 2, None, 1, 1, nn.GELU, nn.BatchNorm2d]] # 5-P4/16
-  - [-1, 6, GELAN_DCNv4, [512 , 2, None, True, nn.GELU, nn.BatchNorm2d]]
+  - [-1, 6, Stage_PureDCNv4, [512 , None, nn.GELU]]
   - [-1, 1, CNA, [1024, 3, 2, None, 1, 1, nn.GELU, nn.BatchNorm2d]] # 7-P5/32
-  - [-1, 3, GELAN_DCNv4, [1024, 2, None, True, nn.GELU, nn.BatchNorm2d]]
+  - [-1, 3, Stage_PureDCNv4, [1024, None, nn.GELU]]
   
 head:
   - [-1, 1, ClassificationHead, [nc]] 
