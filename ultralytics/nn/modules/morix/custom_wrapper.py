@@ -244,9 +244,9 @@ class MetaFormer(nn.Module, ABC):
             else nn.Identity()
         self.ls2   = Scale(self.c, self.ls_init) if self.ls_init \
             else nn.Identity()
-        self.rs1   = Scale(self.c, self.ls_init) if self.rs_init \
+        self.rs1   = Scale(self.c, self.rs_init) if self.rs_init \
             else nn.Identity()
-        self.rs2   = Scale(self.c, self.ls_init) if self.rs_init \
+        self.rs2   = Scale(self.c, self.rs_init) if self.rs_init \
             else nn.Identity()
         self.drop_path1 = DropPath(self.drop_path) if self.drop_path > 0.\
             else nn.Identity()
