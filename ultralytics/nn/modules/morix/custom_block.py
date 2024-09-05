@@ -428,8 +428,8 @@ class Stage_DCNFormer(Sequentially):
                  drop: float = 0, drop_path: float = 0, 
                  layer_scale_init_value: float = None, 
                  res_scale_init_value: float = None, 
-                 norm: Type[nn.Module] = LayerNorm2d, 
-                 act: Type[nn.Module] = nn.GELU,):
+                 act: Type[nn.Module] = nn.GELU,
+                 norm: Type[nn.Module] = LayerNorm2d, ):
         super().__init__(c1, c2, n)
         self.dcn_g = dcn_group
         self.act = act
