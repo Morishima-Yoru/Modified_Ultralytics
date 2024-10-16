@@ -86,6 +86,13 @@ from .transformer import (
     TransformerLayer,
 )
 
+<<<<<<< Updated upstream
+=======
+# Morix
+from .morix.custom_block import *
+from .morix.ops import *
+
+>>>>>>> Stashed changes
 __all__ = (
     "Conv",
     "Conv2",

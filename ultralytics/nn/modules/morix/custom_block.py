@@ -376,17 +376,29 @@ class GELAN_DCNFormer(GELAN_Wrapper):
     def computational(self, c) -> nn.Module:
         return DCNFormer(c, self.mlp_ratio, self.dcn_g, self.drop, self.drop_path, self.ls_init, self.rs_init, self.norm, self.act)
 
+<<<<<<< Updated upstream
 class CSP_DCNv4(CSP_Wrapper):
     def __init__(self, c1, c2, n=2, dcn_g=None, transition1=True, transition2=True, act=nn.GELU, norm=nn.BatchNorm2d, e=0.5) -> None:
         super().__init__(c1, c2, n, transition1, transition2, e, act, norm)
         self.dcn_g = int((c1*e) // 16) if dcn_g is None else dcn_g
+=======
+class DCNv4_Stage(Sequentially):
+    def __init__(self, c1, c2, n):
+        super().__init__(c1, c2, n)
+        self.act = nn.GELU()
+>>>>>>> Stashed changes
         self.build()
         
     def computational(self, c) -> nn.Module:
         return nn.Sequential(
+<<<<<<< Updated upstream
             DeformConv2d_v4(c, c, 3, 1, group=self.dcn_g, dw_kernel_size=3),
             LayerNorm2d(c), # Force DCNv4 to use Layer Normalization
             self.act()
+=======
+            DCNv4(c, 3, 1, group=min(c//16, 4)),
+            nn.LayerNorm(c),
+>>>>>>> Stashed changes
         )
         
 class CSP_DCNFormer(CSP_Wrapper):
