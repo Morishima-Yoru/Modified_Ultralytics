@@ -86,13 +86,9 @@ from .transformer import (
     TransformerLayer,
 )
 
-<<<<<<< Updated upstream
-=======
 # Morix
-from .morix.custom_block import *
-from .morix.ops import *
+from .morix import *
 
->>>>>>> Stashed changes
 __all__ = (
     "Conv",
     "Conv2",
@@ -163,4 +159,34 @@ __all__ = (
     "C2fCIB",
     "Attention",
     "PSA",
+    
+    'PARSE_REQUIRED',
+    'DEPTH_REQUIRED',
+    'CNA',
+    'GELAN_SwinV2',
+    'PatchMerging',
+    'PatchEmbed',
+    'Patchify',
+    'ConvNeXt_Block',
+    'InceptionNeXt_Block',
+    'GELAN_InceptionNeXt',
+    'GELAN_ConvNeXt',
+    'ConvNeXtStage',
+    'InceptionNeXtStage',
+    'ELAN',
+    'ELAN_DarknetBottleneck',
+    'DCNFormer',
+    'GELAN_DCNv4',
+    'GELAN_DCNFormer',
+    'CSP_DCNv4',
+    'DCNv4_Stage',
+    'CSP_DCNFormer',
+    'Stage_PureDCNv4',
+    'Stage_DCNFormer',
+    'AvgDownsample',
+    'SubPixelConv',
+    'SwitchNorm2d',
+    'LayerNorm2d',
+    'SwitchNorm2dNoBatch',
+    'ClassificationHead',
 )

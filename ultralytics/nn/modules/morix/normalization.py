@@ -421,6 +421,5 @@ class FakeLayerNorm2d(nn.GroupNorm):
         )
         super().__init__(1, num_channels, eps, affine, device, dtype)
 
-SwitchNorm1dNoBatch = partial(SwitchNorm1d, using_bn=False)
 SwitchNorm2dNoBatch = partial(SwitchNorm2d, using_bn=False)
 SwitchNorm3dNoBatch = partial(SwitchNorm3d, using_bn=False)

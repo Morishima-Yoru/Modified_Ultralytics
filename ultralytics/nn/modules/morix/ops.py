@@ -379,8 +379,8 @@ class SwinV2Block(nn.Module):
 
 class DeformConv2d_v4(nn.Module):
     SUPPORT_FORMAT = {
-        "channel_first": e_Format.BCHW,
-        "channel_last":  e_Format.BHWC,
+        "channel_first": ShapeFormat.BCHW,
+        "channel_last":  ShapeFormat.BHWC,
     }    
     class CenterFeatureScaleModule(nn.Module):
         def forward(self,
@@ -483,14 +483,14 @@ class DeformConv2d_v4(nn.Module):
 
     def forward(self, x):
         # nn.Conv2d requires BCHW shapes.
-        x = format_convert(x, self.data_format, e_Format.BCHW)
+        x = format_convert(x, self.data_format, ShapeFormat.BCHW)
         x_proj = self.value_proj(x)
         offset_mask_input = self.offset_mask_dw(x)
         offset_mask = self.offset_mask(offset_mask_input)
 
         # Deformable Conv v4 requires BHWC shapes.
-        x_proj =      format_convert(x_proj     , e_Format.BCHW, e_Format.BHWC)
-        offset_mask = format_convert(offset_mask, e_Format.BCHW, e_Format.BHWC)
+        x_proj =      format_convert(x_proj     , ShapeFormat.BCHW, ShapeFormat.BHWC)
+        offset_mask = format_convert(offset_mask, ShapeFormat.BCHW, ShapeFormat.BHWC)
         x = DCNv4Function.apply(
             x_proj, offset_mask,
             self.kernel_size, self.kernel_size,
@@ -511,11 +511,11 @@ class DeformConv2d_v4(nn.Module):
             x = x * (1 - center_feature_scale) + x_proj * center_feature_scale
 
         # Convert back before Pointwise Conv/Return.
-        x = format_convert(x, e_Format.BHWC, e_Format.BCHW)
+        x = format_convert(x, ShapeFormat.BHWC, ShapeFormat.BCHW)
         x = self.output_proj(x)
         
         # Convert to original input shape.
-        return format_convert(x, e_Format.BCHW, self.data_format)
+        return format_convert(x, ShapeFormat.BCHW, self.data_format)
         
 class DarknetBottleneck(nn.Module):
     """Standard bottleneck with activation and normalization exposed."""

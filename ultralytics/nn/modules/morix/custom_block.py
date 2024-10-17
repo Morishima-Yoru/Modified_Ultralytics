@@ -347,13 +347,13 @@ class DCNFormer(MetaFormer):
 class GELAN_DCNv4(GELAN_Wrapper):
     def __init__(self, c1, c2, n=2, g=2, dcn_g=None, transition=True, act=nn.GELU, norm=LayerNorm2d, e=0.5):
         super().__init__(c1, c2, n, g, transition, e, act, norm)
-        self.dcn_g = int((c1*e) // 16) if dcn_g is None else dcn_g
+        self.dcn_g = int((self.c) // 16) if dcn_g is None else dcn_g
         self.build()
     
     def computational(self, c) -> nn.Module:
         return nn.Sequential(
             DeformConv2d_v4(c, c, 3, 1, group=self.dcn_g, dw_kernel_size=3),
-            LayerNorm2d(c), # Force DCNv4 to use Layer Normalization
+            self.norm(c), 
             self.act()
         )
 
@@ -376,29 +376,21 @@ class GELAN_DCNFormer(GELAN_Wrapper):
     def computational(self, c) -> nn.Module:
         return DCNFormer(c, self.mlp_ratio, self.dcn_g, self.drop, self.drop_path, self.ls_init, self.rs_init, self.norm, self.act)
 
-<<<<<<< Updated upstream
 class CSP_DCNv4(CSP_Wrapper):
     def __init__(self, c1, c2, n=2, dcn_g=None, transition1=True, transition2=True, act=nn.GELU, norm=nn.BatchNorm2d, e=0.5) -> None:
         super().__init__(c1, c2, n, transition1, transition2, e, act, norm)
         self.dcn_g = int((c1*e) // 16) if dcn_g is None else dcn_g
-=======
 class DCNv4_Stage(Sequentially):
     def __init__(self, c1, c2, n):
         super().__init__(c1, c2, n)
         self.act = nn.GELU()
->>>>>>> Stashed changes
         self.build()
         
     def computational(self, c) -> nn.Module:
         return nn.Sequential(
-<<<<<<< Updated upstream
             DeformConv2d_v4(c, c, 3, 1, group=self.dcn_g, dw_kernel_size=3),
             LayerNorm2d(c), # Force DCNv4 to use Layer Normalization
             self.act()
-=======
-            DCNv4(c, 3, 1, group=min(c//16, 4)),
-            nn.LayerNorm(c),
->>>>>>> Stashed changes
         )
         
 class CSP_DCNFormer(CSP_Wrapper):
@@ -457,3 +449,87 @@ class Stage_DCNFormer(Sequentially):
     def computational(self, c) -> nn.Module:
         return DCNFormer(c, self.mlp_ratio, self.dcn_g, self.drop, self.drop_path, self.ls_init, self.rs_init, self.norm, self.act)
     
+class AvgDownsample(nn.Module):
+    """ADown with exposed Norm. and Act."""
+
+    def __init__(self, c1, c2, act=nn.GELU, norm=nn.LayerNorm):
+        super().__init__()
+        self.c = c2 // 2
+        self.cv1 = CNA(c1 // 2, self.c, 3, 2, 1, norm=norm, act=act)
+        self.cv2 = CNA(c1 // 2, self.c, 1, 1, 0, norm=norm, act=act)
+
+    def forward(self, x):
+        """Forward pass through ADown layer."""
+        x = torch.nn.functional.avg_pool2d(x, 2, 1, 0, False, True)
+        x1, x2 = x.chunk(2, 1)
+        x1 = self.cv1(x1)
+        x2 = torch.nn.functional.max_pool2d(x2, 3, 2, 1)
+        x2 = self.cv2(x2)
+        return torch.cat((x1, x2), 1)
+    
+class SubPixelConv(nn.Module):
+    """
+    Sub-Pixel Convolution
+    
+    Args:
+        c1 (int): Number of input channels.
+        c2 (int): Number of output channels.
+        upscale_factor (int, optional): Upscale factor. Defaults to 2.
+        kernel_size (int, optional): Convolution kernel size. Defaults to 3.
+        act (nn.Module, optional): Activation function. Defaults to nn.ReLU.
+        norm (nn.Module, optional): Normalization layer. Defaults to nn.BatchNorm2d.
+        
+    Referencez:
+        [1] Wenzhe Shi, Jose Caballero, Ferenc Huszár, Johannes Totz, Andrew P. Aitken, Rob Bishop, Daniel Rueckert, and Zehan Wang. "Real-Time Single Image and Video Super-Resolution Using an Efficient Sub-Pixel Convolutional Neural Network" in Proc. CVPR 2016. 
+    """
+    def __init__(self, c1: int, c2: int, 
+                 upscale_factor: int=2, 
+                 kernel_size: int=3, 
+                 act=nn.ReLU, norm=nn.BatchNorm2d):
+        
+        super().__init__()
+        self.c2 = c2
+        self.r = upscale_factor
+        self.cv1 = CNA(c1, c2 * (upscale_factor ** 2), k=kernel_size, act=act, norm=norm)
+
+    def forward(self, x: Tensor) -> Tensor:
+        # B, C1*r^2 (usually), H, W
+        x = self.cv1(x)
+        _, _, h, w = x.size()
+        # B, C1, r, r, H, W (Decomp mutliplled channels) ->
+        # B, C1, H, r, W, r (Align sub-pixels to H and W) ->
+        # Memory contiguous ->
+        # B, C1, H*r, W*r (Upsampled H and w with r times.)
+        x = x.view(-1, self.c2, self.r, self.r, h, w) \
+             .permute(0, 1, 4, 2, 5, 3)\
+             .contiguous()\
+             .reshape(-1, self.c2, h * self.r, w * self.r)
+        return x
+
+class DeformedSubPixelConv(nn.Module):
+    def __init__(self, c1: int, c2: int, 
+                 upscale_factor: int=2, 
+                 kernel_size: int=3,
+                 act=nn.ReLU, norm=nn.BatchNorm2d):
+        super().__init__()
+        self.c2 = c2
+        self.r = r = upscale_factor
+        self._cr =  c2 * (r ** 2)
+        self.cv1 = CNA(c1, self._cr, k=1, act=act, norm=norm)
+        self.cv2 = CNA(self._cr, self._cr, k=kernel_size, act=act, norm=norm)
+        self.cv3 = DCNv4(self._cr, self._cr, k=kernel_size, act=act, norm=norm, group=int((self._cr) // 16))
+        self.cv4 = CNA(self._cr * 2, self._cr, k=1, act=act, norm=norm)
+    
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.cv1(x)
+        xa, xb = self.cv2(x), self.cv3(x)
+        x = torch.cat([xa, xb], 1)
+        x = self.cv4(x)
+        
+        _, _, h, w = x.size()
+        x = x.view(-1, self.c2, self.r, self.r, h, w) \
+             .permute(0, 1, 4, 2, 5, 3)\
+             .contiguous()\
+             .reshape(-1, self.c2, h * self.r, w * self.r)
+        return x
+

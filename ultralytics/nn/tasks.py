@@ -61,10 +61,36 @@ from ultralytics.nn.modules import (
     Segment,
     WorldDetect,
     v10Detect,
+    
+    PARSE_REQUIRED,
+    DEPTH_REQUIRED,
+    CNA,
+    GELAN_SwinV2,
+    PatchMerging,
+    PatchEmbed,
+    Patchify,
+    ConvNeXt_Block,
+    InceptionNeXt_Block,
+    GELAN_InceptionNeXt,
+    GELAN_ConvNeXt,
+    ConvNeXtStage,
+    InceptionNeXtStage,
+    ELAN,
+    ELAN_DarknetBottleneck,
+    DCNFormer,
+    GELAN_DCNv4,
+    GELAN_DCNFormer,
+    CSP_DCNv4,
+    DCNv4_Stage,
+    CSP_DCNFormer,
+    Stage_PureDCNv4,
+    Stage_DCNFormer,
+    AvgDownsample,
+    SubPixelConv,
+    SwitchNorm2d,
+    LayerNorm2d,
+    SwitchNorm2dNoBatch,
 )
-from ultralytics.nn.modules.morix.custom_block import *
-from ultralytics.nn.modules.morix.ops import *
-from ultralytics.nn.modules.morix.custom_head import *
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
 from ultralytics.utils.loss import (
@@ -302,6 +328,7 @@ class DetectionModel(BaseModel):
     def __init__(self, cfg="yolov8n.yaml", ch=3, nc=None, verbose=True):  # model, input channels, number of classes
         """Initialize the YOLOv8 detection model with the given config and parameters."""
         super().__init__()
+        
         self.yaml = cfg if isinstance(cfg, dict) else yaml_model_load(cfg)  # cfg dict
         if self.yaml["backbone"][0][2] == "Silence":
             LOGGER.warning(
@@ -316,6 +343,11 @@ class DetectionModel(BaseModel):
             LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
             self.yaml["nc"] = nc  # override YAML value
         self.model, self.save = parse_model(deepcopy(self.yaml), ch=ch, verbose=verbose)  # model, savelist
+        _dev = None
+        if (bool(self.yaml.get("cuda_forced", False)) == True): 
+            _dev = 'cuda'
+            self.model.to(_dev)
+        # print(next(self.model.parameters()).device)
         self.names = {i: f"{i}" for i in range(self.yaml["nc"])}  # default names dict
         self.inplace = self.yaml.get("inplace", True)
         self.end2end = getattr(self.model[-1], "end2end", False)
@@ -332,7 +364,7 @@ class DetectionModel(BaseModel):
                     return self.forward(x)["one2many"]
                 return self.forward(x)[0] if isinstance(m, (Segment, Pose, OBB)) else self.forward(x)
 
-            m.stride = torch.tensor([s / x.shape[-2] for x in _forward(torch.zeros(1, ch, s, s))])  # forward
+            m.stride = torch.tensor([s / x.shape[-2] for x in _forward(torch.zeros(1, ch, s, s, device=_dev))])  # forward
             self.stride = m.stride
             m.bias_init()  # only run once
         else:
@@ -1000,24 +1032,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             SCDown,
             C2fCIB,
             # 
-            ClassificationHead,
-            GELAN_SwinV2,
-            PatchMerging,
-            Patchify,
-            PatchEmbed,
-            GELAN_ConvNeXt,
-            GELAN_InceptionNeXt,
-            ELAN,
-            CNA,
-            ConvNeXtStage,
-            InceptionNeXtStage,
-            ELAN_DarknetBottleneck,
-            GELAN_DCNv4,
-            GELAN_DCNFormer,
-            CSP_DCNv4,
-            CSP_DCNFormer,
-            Stage_PureDCNv4,
-            Stage_DCNFormer,
+            *PARSE_REQUIRED
         }:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
@@ -1028,16 +1043,6 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                     max(round(min(args[2], max_channels // 2 // 32)) * width, 1) if args[2] > 1 else args[2]
                 )  # num heads
             args = [c1, c2, *args[1:]]
-<<<<<<< HEAD
-            if m in {BottleneckCSP, C1, C2, C2f, C2fAttn, C3, C3TR, C3Ghost, C3x, RepC3, C2fCIB, GELAN_SwinV2, GELAN_InceptionNeXt, GELAN_ConvNeXt, ELAN,
-                     GELAN_DCNv4, ConvNeXtStage, InceptionNeXtStage, ELAN_DarknetBottleneck,
-                        GELAN_DCNv4,
-                        GELAN_DCNFormer,
-                        CSP_DCNv4,
-                        CSP_DCNFormer,
-                        Stage_PureDCNv4,
-                        Stage_DCNFormer,}:
-=======
             if m in {
                 BottleneckCSP,
                 C1,
@@ -1052,9 +1057,9 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 RepC3,
                 C2fPSA,
                 C2fCIB,
-                C2PSA,
+                C2PSA, 
+                *DEPTH_REQUIRED
             }:
->>>>>>> upstream/main
                 args.insert(2, n)  # number of repeats
                 n = 1
             if m is C3k2 and scale in "mlx":  # for M/L/X sizes
@@ -1087,7 +1092,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             c2 = ch[f[-1]]
         else:
             c2 = ch[f]
-        print(args)
+        # print(args)
         m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace("__main__.", "")  # module type
         m_.np = sum(x.numel() for x in m_.parameters())  # number params
@@ -1132,7 +1137,6 @@ def guess_model_scale(model_path):
     Returns:
         (str): The size character of the model's scale, which can be n, s, m, l, or x.
     """
-<<<<<<< HEAD
     ret = ""
     import re
     with contextlib.suppress(AttributeError):
@@ -1140,12 +1144,6 @@ def guess_model_scale(model_path):
     with contextlib.suppress(AttributeError):
         ret = re.search(r"-scale=([^/\\]+)", Path(model_path).stem).group(1)  # A~Z
     return ret
-=======
-    try:
-        return re.search(r"yolo[v]?\d+([nslmx])", Path(model_path).stem).group(1)  # noqa, returns n, s, m, l, or x
-    except AttributeError:
-        return ""
->>>>>>> upstream/main
 
 
 def guess_model_task(model):
