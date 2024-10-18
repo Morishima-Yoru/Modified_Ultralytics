@@ -569,6 +569,22 @@ class SubPixelConv(nn.Module):
         x = self.upsample(x)
         return x
 
+class SubPixelDWConv(nn.Module):
+    def __init__(self, c1: int, c2: int, 
+                upscale_factor: int=2, 
+                kernel_size: int=3, 
+                act:  Optional[Callable[[],    nn.Module]]=nn.GELU, 
+                norm: Optional[Callable[[int], nn.Module]]=LayerNorm2d,):
+        super().__init__()
+        self.c2 = c2 if c2 > 0 else c1
+        self.r = upscale_factor
+        self.cv1 = DWCNA(c1, c2 * (upscale_factor ** 2), k=kernel_size, act=act, norm=norm)
+        self.upsample = nn.PixelShuffle(self.r)
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.cv1(x)
+        x = self.upsample(x)
+        return x
+
 class DeformedSubPixelConv(nn.Module):
     def __init__(self, c1: int, c2: int, 
                  upscale_factor: int=2, 

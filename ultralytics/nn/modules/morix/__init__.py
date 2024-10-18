@@ -1,6 +1,7 @@
 from .ops import (
     CNA,
     SubPixelConv,
+    SubPixelDWConv,
     DeformedSubPixelConv,
 )
 
@@ -62,6 +63,7 @@ PARSE_REQUIRED = (
     Stage_DCNFormer,
     AvgDownsample,
     SubPixelConv,
+    SubPixelDWConv,
     DeformedSubPixelConv,
     ClassificationHead,
 )
@@ -108,6 +110,7 @@ __all__ = (
     'Stage_DCNFormer',
     'AvgDownsample',
     'SubPixelConv',
+    'SubPixelDWConv',
     'SwitchNorm2d',
     'LayerNorm2d',
     'SwitchNorm2dNoBatch',

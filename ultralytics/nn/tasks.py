@@ -87,6 +87,7 @@ from ultralytics.nn.modules import (
     Stage_DCNFormer,
     AvgDownsample,
     SubPixelConv,
+    SubPixelDWConv,
     DeformedSubPixelConv,
     SwitchNorm2d,
     LayerNorm2d,

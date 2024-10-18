@@ -185,6 +185,7 @@ __all__ = (
     'Stage_DCNFormer',
     'AvgDownsample',
     'SubPixelConv',
+    'SubPixelDWConv',
     'SwitchNorm2d',
     'LayerNorm2d',
     'DeformedSubPixelConv',
