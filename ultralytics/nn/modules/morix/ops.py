@@ -578,6 +578,9 @@ class DeformedSubPixelConv(nn.Module):
         self.c2 = c2 if c2 > 0 else c1
         self.r = r = upscale_factor
         self._cr =  c2 * (r ** 2)
+        if (isinstance(norm, str)): norm = eval(norm)
+        if (isinstance(act,  str)): act  = eval(act)
+        assert isinstance(norm, type) and isinstance(act, type)
         self._act   = act()             if act  is not None else nn.Identity()
         self._norm  = norm(self._cr)    if norm is not None else nn.Identity()
         self.cv1 = DWCNA(c1, self._cr, k=kernel_size, act=act, norm=norm)
