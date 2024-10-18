@@ -10,13 +10,7 @@ import torch
 import torch.nn as nn
 
 from .ops import *
-    
-NO_COMPUTATIONAL_IMPLEMENTED = \
-    NotImplementedError("Attributes not initialized properly. You need to implement your computational method")
-NO_BUILD = \
-    NotImplementedError("Wrapper does not build properly. Call build() first.")
-CHANNEL_MISMATCH_NOTALLOW = \
-    lambda x, y: ValueError(f"This Stage Wrapper doesn't allow different input/output channels. Got c1: {x}, c2: {y}")
+from .definitions import *
 
 class GELAN_Wrapper(nn.Module, ABC):
     r""" Generalized Efficient Layer Aggeration Network (GELAN) wrapper.

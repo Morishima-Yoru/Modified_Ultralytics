@@ -29,6 +29,7 @@ from .custom_block import (
     Stage_DCNFormer,
     AvgDownsample,
     SubPixelConv,
+    DeformedSubPixelConv,
 )
 
 from .normalization import (
@@ -61,6 +62,7 @@ PARSE_REQUIRED = (
     Stage_DCNFormer,
     AvgDownsample,
     SubPixelConv,
+    DeformedSubPixelConv,
     ClassificationHead,
 )
 DEPTH_REQUIRED = (
@@ -109,6 +111,7 @@ __all__ = (
     'SwitchNorm2d',
     'LayerNorm2d',
     'SwitchNorm2dNoBatch',
+    'DeformedSubPixelConv',
     'ClassificationHead'
 )
 

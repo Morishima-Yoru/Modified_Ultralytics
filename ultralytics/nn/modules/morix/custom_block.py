@@ -488,10 +488,10 @@ class SubPixelConv(nn.Module):
                  act=nn.ReLU, norm=nn.BatchNorm2d):
         
         super().__init__()
-        self.c2 = c2
+        self.c2 = c2 if c2 > 0 else c1
         self.r = upscale_factor
         self.cv1 = CNA(c1, c2 * (upscale_factor ** 2), k=kernel_size, act=act, norm=norm)
-
+        self.upsample = nn.PixelShuffle(self.r)
     def forward(self, x: Tensor) -> Tensor:
         # B, C1*r^2 (usually), H, W
         x = self.cv1(x)
@@ -500,36 +500,31 @@ class SubPixelConv(nn.Module):
         # B, C1, H, r, W, r (Align sub-pixels to H and W) ->
         # Memory contiguous ->
         # B, C1, H*r, W*r (Upsampled H and w with r times.)
-        x = x.view(-1, self.c2, self.r, self.r, h, w) \
-             .permute(0, 1, 4, 2, 5, 3)\
-             .contiguous()\
-             .reshape(-1, self.c2, h * self.r, w * self.r)
+        x = self.upsample(x)
         return x
 
 class DeformedSubPixelConv(nn.Module):
     def __init__(self, c1: int, c2: int, 
                  upscale_factor: int=2, 
                  kernel_size: int=3,
-                 act=nn.ReLU, norm=nn.BatchNorm2d):
+                 act=nn.GELU, norm=LayerNorm2d):
         super().__init__()
-        self.c2 = c2
+        self.c2 = c2 if c2 > 0 else c1
         self.r = r = upscale_factor
         self._cr =  c2 * (r ** 2)
-        self.cv1 = CNA(c1, self._cr, k=1, act=act, norm=norm)
-        self.cv2 = CNA(self._cr, self._cr, k=kernel_size, act=act, norm=norm)
-        self.cv3 = DCNv4(self._cr, self._cr, k=kernel_size, act=act, norm=norm, group=int((self._cr) // 16))
-        self.cv4 = CNA(self._cr * 2, self._cr, k=1, act=act, norm=norm)
-    
+        self._act   = act()             if act  is not None else nn.Identity()
+        self._norm  = norm(self._cr)    if norm is not None else nn.Identity()
+        self.cv1 = CNA(c1, self._cr, k=kernel_size, act=act, norm=norm)
+        self.cv2 = DCNv4(self._cr, self._cr, k=kernel_size, group=int((self._cr) // 16))
+        self.upsample = nn.PixelShuffle(self.r)
+
     def forward(self, x: Tensor) -> Tensor:
         x = self.cv1(x)
-        xa, xb = self.cv2(x), self.cv3(x)
-        x = torch.cat([xa, xb], 1)
-        x = self.cv4(x)
+        _x = self.cv2(x)
+        _x = self._norm(_x)
+        x = x + _x
+        x = self._act(x)
         
-        _, _, h, w = x.size()
-        x = x.view(-1, self.c2, self.r, self.r, h, w) \
-             .permute(0, 1, 4, 2, 5, 3)\
-             .contiguous()\
-             .reshape(-1, self.c2, h * self.r, w * self.r)
+        x = self.upsample(x)
         return x
 
