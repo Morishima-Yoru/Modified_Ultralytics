@@ -187,6 +187,7 @@ __all__ = (
     'SubPixelConv',
     'SwitchNorm2d',
     'LayerNorm2d',
+    'DeformedSubPixelConv',
     'SwitchNorm2dNoBatch',
     'ClassificationHead',
 )
