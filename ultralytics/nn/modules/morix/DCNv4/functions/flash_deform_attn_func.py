@@ -20,9 +20,11 @@ shm_size_dict = {
     "7.5": 64000,
     "7.0": 96000,
 }
-
-cuda_capability = f"{torch.cuda.get_device_properties(0).major}.{torch.cuda.get_device_properties(0).minor}"
-
+try:
+    cuda_capability = f"{torch.cuda.get_device_properties(0).major}.{torch.cuda.get_device_properties(0).minor}"
+except:
+    cuda_capability = None
+    
 if cuda_capability not in shm_size_dict:
     # raise NotImplementedError
     import warnings
