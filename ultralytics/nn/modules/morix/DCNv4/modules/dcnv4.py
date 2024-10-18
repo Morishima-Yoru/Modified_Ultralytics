@@ -1,8 +1,4 @@
-# --------------------------------------------------------
-# Deformable Convolution v4
-# Copyright (c) 2023 OpenGVLab
-# Licensed under The MIT License [see LICENSE for details]
-# --------------------------------------------------------
+
 
 from __future__ import absolute_import
 from __future__ import print_function

@@ -1,0 +1,49 @@
+
+nc:  50
+scales:
+  n: [0.50, 0.25, 1024]
+  s: [0.50, 0.50, 1024]
+  m: [0.75, 0.75, 1024] 
+  l: [1.00, 1.00, 1024] 
+  x: [1.00, 1.25, 1024] 
+
+cuda_forced: True # FIXME nn/tasks.py/DetectionModel.__init__()
+
+#GELAN_DCNv4: c1, c2, n=2, g=2, dcn_g=None, transition=True, act=nn.GELU, norm=LayerNorm2d, e=0.5
+backbone:
+  # [from, repeats, module, args]
+  # b0, Stem
+  - [-1, 1, CNA, [64,   3, 2, None, 1, 1, nn.GELU, SwitchNorm2d]]       # 0-P1/2
+  - [-1, 1, CNA, [128,  3, 2, None, 1, 1, nn.GELU, SwitchNorm2d]]       # 1-P2/4
+  # b2, Stage 1
+  - [-1, 6, GELAN_DCNv4, [128 , 1, None, False, nn.GELU, SwitchNorm2d]]
+  - [-1, 1, AvgDownsample, [256,  nn.GELU, SwitchNorm2d]]               # 3-P3/8
+  # b4, Stage 2
+  - [-1, 6, GELAN_DCNv4, [256 , 1, None, False, nn.GELU, SwitchNorm2d]]
+  - [-1, 1, AvgDownsample, [512,  nn.GELU, SwitchNorm2d]]               # 5-P4/16
+  # b6, Stage 3
+  - [-1, 8, GELAN_DCNv4, [512 , 1, None, False, nn.GELU, SwitchNorm2d]]
+  - [-1, 1, AvgDownsample, [1024, nn.GELU, SwitchNorm2d]]               # 7-P5/32
+  # b8, Stage 4
+  - [-1, 8, GELAN_DCNv4, [1024, 1, None, False, nn.GELU, SwitchNorm2d]]
+  - [-1, 1, SPPF, [1024, 5]]                                            # 9
+
+head:
+  # b10, FPN-1
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
+  - [[-1, 6], 1, Concat, [1]]                                           
+  - [-1, 8, GELAN_DCNv4, [512, 1, None, False, nn.GELU, SwitchNorm2d]]   # 12
+  # b13, FPN-2
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
+  - [[-1, 4], 1, Concat, [1]] 
+  - [-1, 8, GELAN_DCNv4, [256, 1, None, False, nn.GELU, SwitchNorm2d]]   # 15
+  # b16, PANet-1
+  - [-1, 1, CNA, [256, 3, 2, None, 1, 1, nn.GELU, SwitchNorm2d]]
+  - [[-1, 12], 1, Concat, [1]]
+  - [-1, 8, GELAN_DCNv4, [512, 1, None, False, nn.GELU, SwitchNorm2d]]   # 18
+  # b19, PANet-2
+  - [-1, 1, CNA, [512, 3, 2, None, 1, 1, nn.GELU, SwitchNorm2d]]
+  - [[-1, 9], 1, Concat, [1]] 
+  - [-1, 8, GELAN_DCNv4, [1024, 1, None, False, nn.GELU, SwitchNorm2d]]  # 21
+  # Detection head
+  - [[15, 18, 21], 1, Detect, [nc]] 

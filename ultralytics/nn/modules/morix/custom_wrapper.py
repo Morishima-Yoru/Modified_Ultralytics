@@ -1,4 +1,4 @@
-from abc import *
+from abc import ABC, abstractmethod
 import inspect
 try:
     from typing import Self, Type  # Python 3.11+
@@ -23,8 +23,8 @@ class GELAN_Wrapper(nn.Module, ABC):
         g (int, optional): Number of Computational blocks in group. Default: 2
         transition (bool, optional): Activate "Fusion First" transition layer. Detail refers to [1] Fig. 4c. Default: True
         e (float, optional): CSP Expandsion. Default: 0.5
-        act (nn.Module, optional): Activation for stray convolution. Default: nn.GELU
-        norm (nn.Module, optional): Normalization for stray convolution. Default: timm.models.convnext.LayerNorm2d copies.
+        act (callable[[], nn.Module]], optional): Activation. Default: nn.GELU
+        norm (callable[[int], nn.Module]], optional): Normalization. Default: timm.models.convnext.LayerNorm2d copies
     References
         [1] C.-Y. Wang, I-H. Yeh, and H.-Y. M. Liao, "YOLOv9: Learning What You Want to Learn Using Programmable Gradient Information," arXiv preprint arXiv:2402.13616, Feb. 21, 2024.
         [2] C.-Y. Wang, H.-Y. M. Liao, and I-H. Yeh, "Designing Network Design Strategies Through Gradient Path Analysis," Journal of Information Science and Engineering, Vol. 39 No. 4, pp. 975-995, 2023.
@@ -40,6 +40,8 @@ class GELAN_Wrapper(nn.Module, ABC):
         self.e = e
         if (isinstance(act, str)):  act  = eval(act)
         if (isinstance(norm, str)): norm = eval(norm)
+        assert isinstance(norm, type) and isinstance(act, type)
+
         self.act = act
         self.norm = norm
         self.__ready = False

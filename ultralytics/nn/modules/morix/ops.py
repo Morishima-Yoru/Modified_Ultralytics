@@ -1,5 +1,5 @@
 
-from typing import Type, Union
+from typing import Callable, Tuple, Type, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,8 +18,7 @@ from .utils import *
 import torch.nn.functional as F
 from torch.nn.init import xavier_uniform_, constant_
 from .DCNv4.functions import DCNv4Function
-
-NO_FORMAT_SUPPORT = lambda a, b: NotImplementedError("Format not support. Support format: {}, got: {}".format(a, b))
+from .definitions import *
 
 class CNA(nn.Module):
     """Classic Convolution-Normalization-Activation topology
@@ -27,25 +26,29 @@ class CNA(nn.Module):
     Args:
         c1 (int): Number of input channels.
         c2 (int): Number of output channels.
-        k (int, optional): Kernel size. Default: 1
-        s (int, optional): Stride. Default: 1
-        p (int, optional): Padding. Default: None
-        g (int, optional): Groups. Default: 1
-        d (int, optional): Dilation. Default: 1
-        act (Type[nn.Module], optional): Activation. Default: nn.GELU
-        norm (Type[nn.Module], optional): Normalization. Default: timm.models.convnext.LayerNorm2d copies
+        k (int | tuple[int, int]): Kernel size. Default: 1
+        s (int | tuple[int, int]): Stride. Default: 1
+        p (int | tuple[int, int], optional): Padding. Default: None for Automaticly padding.
+        g (int): Groups. Default: 1
+        d (int): Dilation. Default: 1
+        act (callable[[], nn.Module]], optional): Activation. Default: nn.GELU
+        norm (callable[[int], nn.Module]], optional): Normalization. Default: timm.models.convnext.LayerNorm2d copies
 
     """
     
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, 
-                 act: Type[nn.Module]=nn.GELU, 
-                 norm: Type[nn.Module]=FakeLayerNorm2d):
+    def __init__(self, c1: int, c2: int, 
+                 k: int | Tuple[int, int]=1, s: int | Tuple[int, int]=1, p: Optional[int | Tuple[int, int]]=None, 
+                 g: int=1, d: int=1,
+                 act:  Optional[Callable[[],    nn.Module]]=nn.GELU, 
+                 norm: Optional[Callable[[int], nn.Module]]=LayerNorm2d,
+                 bias: bool=False):
         super().__init__()
         # Direct lint from yaml handle.
         if (isinstance(norm, str)): norm = eval(norm)
         if (isinstance(act,  str)): act  = eval(act)
+        assert isinstance(norm, type) and isinstance(act, type)
         
-        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=bias)
         self.norm = norm(c2) if norm is not None else nn.Identity()
         self.act =  act()    if act  is not None else nn.Identity()
 
@@ -53,12 +56,16 @@ class CNA(nn.Module):
     def forward(self, x):
         """Apply convolution, batch normalization and activation to input tensor."""
         return self.act(self.norm(self.conv(x)))
-    
-    
-    def forward_fuse(self, x):
-        # TODO: Not implement.
-        return self.act(self.norm(self.conv(x)))
-    
+
+class DWCNA(CNA):
+    def __init__(self, c1: int, c2: int, 
+                 k: int | Tuple[int, int]=1, s: int | Tuple[int, int]=1, p: Optional[int | Tuple[int, int]]=None, 
+                 d: int=1,
+                 act:  Optional[Callable[[],    nn.Module]]=nn.GELU, 
+                 norm: Optional[Callable[[int], nn.Module]]=LayerNorm2d, 
+                 bias: bool=False):
+        super().__init__(c1, c2, k=k, s=s, p=p, g=math.gcd(c1, c2), d=d, bias=bias, act=act, norm=norm)
+
 class InceptionDWConv2d(nn.Module):
     """ Inception depthweise convolution
     Copies from https://github.com/sail-sg/inceptionnext/blob/main/models/inceptionnext.py
@@ -79,7 +86,7 @@ class InceptionDWConv2d(nn.Module):
         self.dwconv_hw = nn.Conv2d(gc, gc, ksize, padding=ksize//2, groups=gc)
         self.dwconv_w = nn.Conv2d(gc, gc, kernel_size=(1, band_ksize), padding=(0, band_ksize//2), groups=gc)
         self.dwconv_h = nn.Conv2d(gc, gc, kernel_size=(band_ksize, 1), padding=(band_ksize//2, 0), groups=gc)
-        self.split_indexes = (c - 3 * gc, gc, gc, gc)
+        self.split_indexes = [c - 3 * gc, gc, gc, gc]
         
     def forward(self, x):
         x_id, x_hw, x_w, x_h = torch.split(x, self.split_indexes, dim=1)
@@ -102,8 +109,8 @@ class Scale(nn.Module):
 class ConvMLP(nn.Module):
     def __init__(
             self, c1, c2, emb=None, 
-            act: Type[nn.Module]=nn.GELU, 
-            norm:Type[nn.Module]=None, 
+            act:  Optional[Callable[[],    nn.Module]]=nn.GELU, 
+            norm: Optional[Callable[[int], nn.Module]]=LayerNorm2d,
             bias=True, 
             drop=0.):
         """ Multi-layer perceptron equivalent using 1x1 Conv for full BCHW networks.
@@ -142,7 +149,7 @@ class ConvMLP(nn.Module):
 class DropPath(nn.Module):
     def __init__(self, drop_prob=None):
         super(DropPath, self).__init__()
-        self.drop_prob = drop_prob
+        self.drop_prob = drop_prob or 0.
     
     @staticmethod
     def drop_path_f(x, drop_prob: float=0., training: bool=False):
@@ -395,7 +402,7 @@ class DeformConv2d_v4(nn.Module):
     def __init__(
             self,
             c1: int=64,
-            c2: int=None,
+            c2: Optional[int]=None,
             kernel_size=3,
             stride=1,
             pad=None,
@@ -424,12 +431,11 @@ class DeformConv2d_v4(nn.Module):
                 f"Output channels different with input without pointwise are ambiguous.\nGiven: c1: {c1}, c2: {c2}")
         
         if c1 % group != 0:
-            raise ValueError(
-                f'channels must be divisible by group, but got {c1} and {group}')
+            raise NOT_DIVISABLE(c1, group)
         assert (c1 // group) % 16 == 0, "you'd better set _d_per_group to a power of 2 which is more efficient in our CUDA implementation"
 
         if (data_format.lower() not in self.SUPPORT_FORMAT.keys()):
-            raise NO_FORMAT_SUPPORT(self.SUPPORT_FORMAT.keys(), self.data_format)
+            raise NOT_SUPPORTED_FORMAT(self.SUPPORT_FORMAT.keys(), self.data_format)
 
         self.offset_scale = offset_scale
         self.channels = c1
@@ -531,3 +537,60 @@ class DarknetBottleneck(nn.Module):
     def forward(self, x):
         return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
     
+
+class SubPixelConv(nn.Module):
+    """
+    Sub-Pixel Convolution
+    
+    Args:
+        c1 (int): Number of input channels.
+        c2 (int): Number of output channels.
+        upscale_factor (int, optional): Upscale factor. Defaults to 2.
+        kernel_size (int, optional): Convolution kernel size. Defaults to 3.
+        act (callable[[], nn.Module]], optional): Activation. Defaults to `nn.GELU`
+        norm (callable[[int], nn.Module]], optional): Normalization. Defaults to `timm.models.convnext.LayerNorm2d` copies
+        
+    Referencez:
+        [1] W. Shi, J. Caballero, F. Huszár, J. Totz, A. P. Aitken, R. Bishop, D. Rueckert, and Z. Wang. "Real-Time Single Image and Video Super-Resolution Using an Efficient Sub-Pixel Convolutional Neural Network" in Proc. CVPR 2016. 
+    """
+    def __init__(self, c1: int, c2: int, 
+                 upscale_factor: int=2, 
+                 kernel_size: int=3, 
+                 act:  Optional[Callable[[],    nn.Module]]=nn.GELU, 
+                 norm: Optional[Callable[[int], nn.Module]]=LayerNorm2d,):
+        
+        super().__init__()
+        self.c2 = c2 if c2 > 0 else c1
+        self.r = upscale_factor
+        self.cv1 = CNA(c1, c2 * (upscale_factor ** 2), k=kernel_size, act=act, norm=norm)
+        self.upsample = nn.PixelShuffle(self.r)
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.cv1(x)
+        x = self.upsample(x)
+        return x
+
+class DeformedSubPixelConv(nn.Module):
+    def __init__(self, c1: int, c2: int, 
+                 upscale_factor: int=2, 
+                 kernel_size: int=3,
+                 act=nn.GELU, norm=LayerNorm2d):
+        super().__init__()
+        self.c2 = c2 if c2 > 0 else c1
+        self.r = r = upscale_factor
+        self._cr =  c2 * (r ** 2)
+        self._act   = act()             if act  is not None else nn.Identity()
+        self._norm  = norm(self._cr)    if norm is not None else nn.Identity()
+        self.cv1 = DWCNA(c1, self._cr, k=kernel_size, act=act, norm=norm)
+        self.cv2 = DCNv4(self._cr, self._cr, k=kernel_size, group=int((self._cr) // 16))
+        self.upsample = nn.PixelShuffle(self.r)
+
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.cv1(x)
+        _x = self.cv2(x)
+        _x = self._norm(_x)
+        x = x + _x
+        x = self._act(x)
+        
+        x = self.upsample(x)
+        return x
+

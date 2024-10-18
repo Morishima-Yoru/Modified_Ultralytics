@@ -1,12 +1,14 @@
 from .ops import (
     CNA,
+    SubPixelConv,
+    DeformedSubPixelConv,
 )
 
 from .custom_head import (
     ClassificationHead
 )
 
-from .custom_block import (
+from .block import (
     GELAN_SwinV2,
     PatchMerging,
     PatchEmbed,
@@ -28,8 +30,6 @@ from .custom_block import (
     Stage_PureDCNv4,
     Stage_DCNFormer,
     AvgDownsample,
-    SubPixelConv,
-    DeformedSubPixelConv,
 )
 
 from .normalization import (
