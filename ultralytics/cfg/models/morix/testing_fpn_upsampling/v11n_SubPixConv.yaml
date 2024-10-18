@@ -18,11 +18,11 @@ backbone:
 
 # YOLO11n head
 head:
-  - [-1, 1, SubPixelConv, [-1, 2, 3, nn.SiLU, nn.BatchNorm2d]]
+  - [-1, 1, SubPixelConv, [1024, 2, 3, nn.SiLU, nn.BatchNorm2d]]
   - [[-1, 6], 1, Concat, [1]] # cat backbone P4
   - [-1, 2, C3k2, [512, False]] # 13
 
-  - [-1, 1, SubPixelConv, [-1, 2, 3, nn.SiLU, nn.BatchNorm2d]]
+  - [-1, 1, SubPixelConv, [512, 2, 3, nn.SiLU, nn.BatchNorm2d]]
   - [[-1, 4], 1, Concat, [1]] # cat backbone P3
   - [-1, 2, C3k2, [256, False]] # 16 (P3/8-small)
 
