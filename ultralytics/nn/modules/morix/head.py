@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from .ops import *
-from .custom_wrapper import *
+from .wrapper import *
 
 class ClassificationHead(nn.Module):
     """YOLOv8 classification head, i.e. x(b,c1,20,20) to x(b,c2)."""

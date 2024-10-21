@@ -3,10 +3,10 @@ import os.path as osp
 from pathlib import Path
 import pandas as pd
 import random
-from typing import *
+from typing import List
 log = logging.getLogger(__name__)
 
-def list_files(dir: os.PathLike, endswith: str=None, only_fname: bool=False) -> list:
+def list_files(dir: os.PathLike, endswith: str=None, only_fname: bool=False) -> List[str]:
     return [(osp.join(dir, f) if not only_fname else f) for f in os.listdir(dir) if os.path.isfile(osp.join(dir, f)) and (True if endswith is None else f.endswith(endswith))]
 
 def flatten_folder(src_folder: os.PathLike):

@@ -163,7 +163,6 @@ __all__ = (
     'PARSE_REQUIRED',
     'DEPTH_REQUIRED',
     'CNA',
-    'GELAN_SwinV2',
     'PatchMerging',
     'PatchEmbed',
     'Patchify',

@@ -2,15 +2,17 @@ from .ops import (
     CNA,
     SubPixelConv,
     SubPixelDWConv,
-    DeformedSubPixelConv,
 )
 
-from .custom_head import (
+from .exp import (
+    DeformedSubPixelConv,
+    )
+
+from .head import (
     ClassificationHead
 )
 
 from .block import (
-    GELAN_SwinV2,
     PatchMerging,
     PatchEmbed,
     Patchify,
@@ -41,7 +43,6 @@ from .normalization import (
 
 PARSE_REQUIRED = (
     CNA,
-    GELAN_SwinV2,
     PatchMerging,
     PatchEmbed,
     Patchify,
@@ -68,7 +69,6 @@ PARSE_REQUIRED = (
     ClassificationHead,
 )
 DEPTH_REQUIRED = (
-    GELAN_SwinV2,
     GELAN_InceptionNeXt,
     GELAN_ConvNeXt,
     ConvNeXtStage,
@@ -88,7 +88,6 @@ __all__ = (
     'PARSE_REQUIRED',
     'DEPTH_REQUIRED',
     'CNA',
-    'GELAN_SwinV2',
     'PatchMerging',
     'PatchEmbed',
     'Patchify',

@@ -410,8 +410,6 @@ class FakeLayerNorm2d(nn.GroupNorm):
     """
     https://discuss.pytorch.org/t/groupnorm-num-groups-1-and-layernorm-are-not-equivalent/145468/2
 
-    Args:
-        nn (_type_): _description_
     """
     def __init__(self, num_channels: int, eps: float = 0.00001, affine: bool = True, device=None, dtype=None):
         warnings.warn(

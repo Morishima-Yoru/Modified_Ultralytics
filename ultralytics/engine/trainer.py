@@ -43,6 +43,7 @@ from ultralytics.utils.dist import ddp_cleanup, generate_ddp_command
 from ultralytics.utils.files import get_latest_run
 from ultralytics.utils.torch_utils import (
     TORCH_2_4,
+    TORCH_2_0,
     EarlyStopping,
     ModelEMA,
     autocast,
@@ -266,7 +267,10 @@ class BaseTrainer:
         if RANK > -1 and world_size > 1:  # DDP
             dist.broadcast(self.amp, src=0)  # broadcast the tensor from rank 0 to all other ranks (returns None)
         self.amp = bool(self.amp)  # as boolean
-        self.scaler = torch.GradScaler(enabled=self.amp)
+        if (TORCH_2_4):
+            self.scaler = torch.GradScaler(enabled=self.amp)
+        else: # FIXME old torch support.
+            self.scaler = torch.cuda.amp.GradScaler(enabled=self.amp)
         if world_size > 1:
             self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[RANK], find_unused_parameters=True)
 
