@@ -93,17 +93,17 @@ class Patchify(nn.Module):
         c1 (int): Number of input channels.
         c2 (int): Number of output channels.
         patch_sz (int, optional): Number of patch size. Default: 4
-        norm (Type[nn.Module], optional): Normalization layer.  Default: nn.LayerNorm
+        norm (callable[[int], nn.Module]], optional): Normalization. Default: timm.models.convnext.LayerNorm2d copies
 
         [1] Z. Liu, H. Mao, C.-Y. Wu, C. Feichtenhofer, T. Darrell, and S. Xie, "A ConvNet for the 2020s," in Proc. IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), New Orleans, LA, USA, pp. 11976-11986, Jun. 21, 2022.
     """
 
-    def __init__(self, c1, emb, patch_sz=2, norm_first=True, norm: Type[nn.Module]=FakeLayerNorm2d):
+    def __init__(self, c1, emb, patch_size=2, norm_first=True, norm: Type[nn.Module]=FakeLayerNorm2d):
         super().__init__()
         
         if (isinstance(norm, str)): norm = eval(norm)
         
-        self.cv1 = nn.Conv2d(c1, emb, patch_sz, patch_sz)
+        self.cv1 = nn.Conv2d(c1, emb, patch_size, patch_size)
         nch = c1 if norm_first else emb
         self.norm_first = norm_first
         self.norm = norm(nch) if norm is not None else nn.Identity()
