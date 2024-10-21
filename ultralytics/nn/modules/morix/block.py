@@ -123,7 +123,7 @@ class ConvNeXt_Block(MetaNeXt):
         super().__init__(c, 4, drop_path, ls, act=act, norm=norm)
         self.build()
     
-    def token_mixer_layer(self, c: int) -> nn.Module:
+    def token_mixer(self, c: int) -> nn.Module:
         return nn.Conv2d(c, c, kernel_size=7, padding=3, groups=c)
     
 class InceptionNeXt_Block(MetaNeXt):
@@ -142,13 +142,13 @@ class InceptionNeXt_Block(MetaNeXt):
             drop_path (float, optional): Drop path probability. Default: 0.
             ls (float, optional): Label smoothing value. Default: 1e-6.
         """
-        super().__init__(c, mlp_ratio=mlp_ratio, drop_path=drop_path, ls=ls, act=act, norm=norm)
+        super().__init__(c, mlp_ratio=mlp_ratio, drop_path=drop_path, init_ls=ls, act=act, norm=norm)
         self.build()
     
-    def token_mixer_layer(self, c: int) -> nn.Module:
+    def token_mixer(self, c: int) -> nn.Module:
         return InceptionDWConv2d(c)
 
-class GELAN_InceptionNeXt(GELAN_Wrapper):
+class GELAN_InceptionNeXt(GELANWrapper):
     def __init__(self, c1, c2, n, g, mlp_ratio, transition=True, e=0.5, act=nn.GELU, norm=FakeLayerNorm2d):
         """
         Args:
@@ -169,7 +169,7 @@ class GELAN_InceptionNeXt(GELAN_Wrapper):
     def computational(self, c) -> nn.Module:
         return InceptionNeXt_Block(c, self.mlp_ratio)
 
-class GELAN_ConvNeXt(GELAN_Wrapper):
+class GELAN_ConvNeXt(GELANWrapper):
     def __init__(self, c1, c2, n, g, transition=True, e=0.5, act=nn.GELU, norm=FakeLayerNorm2d):
         """
         Args:
@@ -222,7 +222,7 @@ class InceptionNeXtStage(Sequentially):
     def computational(self, c) -> nn.Module:
         return InceptionNeXt_Block(c, mlp_ratio=self.mlp_ratio, act=self.act, norm=self.norm)
 
-class ELAN(GELAN_Wrapper):
+class ELAN(GELANWrapper):
     def __init__(self, c1, c2, n, g, transition=False, e=0.5, act=nn.GELU, norm=nn.BatchNorm2d):
         """
         Args:
@@ -241,7 +241,7 @@ class ELAN(GELAN_Wrapper):
     def computational(self, c) -> nn.Module:
         return CNA(c, c, 3, 1, act=self.act, norm=self.norm)
 
-class ELAN_DarknetBottleneck(GELAN_Wrapper):
+class ELAN_DarknetBottleneck(GELANWrapper):
     def __init__(self, c1, c2, n, g=1, transition=False, e=0.5, act=nn.SiLU, norm=nn.BatchNorm2d):
         super().__init__(c1, c2, n, g, transition, e, act, norm)
         self.build()
@@ -270,10 +270,10 @@ class DCNFormer(MetaFormer):
     def token_mixer_layer(self, c: int) -> nn.Module:
         return DeformConv2d_v4(c, c, 3, group=self.dcn_g, dw_kernel_size=3, without_pointwise=True)
   
-class GELAN_DCNv4(GELAN_Wrapper):
+class GELAN_DCNv4(GELANWrapper):
     def __init__(self, c1, c2, n=2, g=2, dcn_g=None, transition=True, act=nn.GELU, norm=LayerNorm2d, e=0.5):
         super().__init__(c1, c2, n, g, transition, e, act, norm)
-        self.dcn_g = int((self.c) // 16) if dcn_g is None else dcn_g
+        self.dcn_g = int((self._c) // 16) if dcn_g is None else dcn_g
         self.build()
     
     def computational(self, c) -> nn.Module:
@@ -283,7 +283,7 @@ class GELAN_DCNv4(GELAN_Wrapper):
             self.act()
         )
 
-class GELAN_DCNFormer(GELAN_Wrapper):
+class GELAN_DCNFormer(GELANWrapper):
     def __init__(self, c1, c2, n=2, g=2, dcn_group=None, transition=True,
                  mlp_ratio: int=4, drop: float=0, drop_path: float=0, 
                  layer_scale_init_value: float=None, 
@@ -302,7 +302,7 @@ class GELAN_DCNFormer(GELAN_Wrapper):
     def computational(self, c) -> nn.Module:
         return DCNFormer(c, self.mlp_ratio, self.dcn_g, self.drop, self.drop_path, self.ls_init, self.rs_init, self.norm, self.act)
 
-class CSP_DCNv4(CSP_Wrapper):
+class CSP_DCNv4(CSPWrapper):
     def __init__(self, c1, c2, n=2, dcn_g=None, transition1=True, transition2=True, act=nn.GELU, norm=nn.BatchNorm2d, e=0.5) -> None:
         super().__init__(c1, c2, n, transition1, transition2, e, act, norm)
         self.dcn_g = int((c1*e) // 16) if dcn_g is None else dcn_g
@@ -320,7 +320,7 @@ class DCNv4_Stage(Sequentially):
             self.act()
         )
         
-class CSP_DCNFormer(CSP_Wrapper):
+class CSP_DCNFormer(CSPWrapper):
     def __init__(self, c1, c2, n=2, dcn_group=None, transition1=True, transition2=True,
                  mlp_ratio: int=4, drop: float=0, drop_path: float=0, 
                  layer_scale_init_value: float=None, 

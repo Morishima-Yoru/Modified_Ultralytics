@@ -186,7 +186,7 @@ class ConvMLP(nn.Module):
         return x
 
 class DropPath(nn.Module):
-    def __init__(self, drop_prob=None):
+    def __init__(self, drop_prob: float=0.):
         super(DropPath, self).__init__()
         self.drop_prob = drop_prob or 0.
     
@@ -403,3 +403,4 @@ class SubPixelDWConv(nn.Module):
         x = self.cv1(x)
         x = self.upsample(x)
         return x
+
