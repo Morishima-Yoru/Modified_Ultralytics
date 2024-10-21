@@ -26,9 +26,9 @@ class CNA(nn.Module):
     Args:
         c1 (int): Number of input channels.
         c2 (int): Number of output channels.
-        k (int | tuple[int, int]): Kernel size. Default: 1
-        s (int | tuple[int, int]): Stride. Default: 1
-        p (int | tuple[int, int], optional): Padding. Default: None for Automaticly padding.
+        k (Union[int, Tuple[int, int]]): Kernel size. Default: 1
+        s (Union[int, Tuple[int, int]]): Stride. Default: 1
+        p (Union[int, Tuple[int, int]], optional): Padding. Default: None for Automaticly padding.
         g (int): Groups. Default: 1
         d (int): Dilation. Default: 1
         act (callable[[], nn.Module]], optional): Activation. Default: nn.GELU
@@ -37,7 +37,7 @@ class CNA(nn.Module):
     """
     
     def __init__(self, c1: int, c2: int, 
-                 k: int | Tuple[int, int]=1, s: int | Tuple[int, int]=1, p: Optional[int | Tuple[int, int]]=None, 
+                 k: Union[int, Tuple[int, int]]=1, s: Union[int, Tuple[int, int]]=1, p: Optional[Union[int, Tuple[int, int]]]=None, 
                  g: int=1, d: int=1,
                  act:  Optional[Callable[[],    nn.Module]]=nn.GELU, 
                  norm: Optional[Callable[[int], nn.Module]]=LayerNorm2d,
@@ -59,7 +59,7 @@ class CNA(nn.Module):
 
 class DWCNA(CNA):
     def __init__(self, c1: int, c2: int, 
-                 k: int | Tuple[int, int]=1, s: int | Tuple[int, int]=1, p: Optional[int | Tuple[int, int]]=None, 
+                 k: Union[int, Tuple[int, int]]=1, s: Union[int, Tuple[int, int]]=1, p: Optional[Union[int, Tuple[int, int]]]=None, 
                  d: int=1,
                  act:  Optional[Callable[[],    nn.Module]]=nn.GELU, 
                  norm: Optional[Callable[[int], nn.Module]]=LayerNorm2d, 

@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional
+from typing import Optional, Union
 
 import torch
 import torch.nn as nn
@@ -28,7 +28,7 @@ class ShapeFormat(Enum):
             raise ValueError(f"Unknown format string: {fmt_str}")
         
     @classmethod
-    def to_enum(cls, value: 'ShapeFormat | int | str') -> 'ShapeFormat':
+    def to_enum(cls, value: Union['ShapeFormat', int, str]) -> 'ShapeFormat':
         if isinstance(value, cls):
             return value
         if isinstance(value, int):
@@ -38,8 +38,8 @@ class ShapeFormat(Enum):
         raise TypeError(f"Cannot convert {value} to e_Format")
 
 def format_convert(x: torch.Tensor, 
-                   fmt_from: ShapeFormat | int | str, 
-                   fmt_to:   ShapeFormat | int | str,
+                   fmt_from: Union[ShapeFormat, int, str], 
+                   fmt_to:   Union[ShapeFormat, int, str],
                    HW_shape: Optional[tuple]=None,) -> torch.Tensor:
     
     fmt_from = ShapeFormat.to_enum(fmt_from)
@@ -87,7 +87,7 @@ def format_convert(x: torch.Tensor,
         
     return convert(x).contiguous()
 
-def get_HW_shape(x: torch.Tensor, fmt: ShapeFormat | int | str) -> tuple:
+def get_HW_shape(x: torch.Tensor, fmt: Union[ShapeFormat, int, str]) -> tuple:
     fmt = ShapeFormat.to_enum(fmt)
     if (fmt is ShapeFormat.BLC):
         raise ValueError(f"{fmt} doesn't have Height and Width")
